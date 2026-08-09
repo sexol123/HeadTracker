@@ -30,6 +30,7 @@ class Profile:
     camera_fps: int = 30
     mirror: bool = True
     camera_url: str = ""
+    camera_source: str = "local"
     image_enhance: bool = False
     axes: dict[str, AxisConfig] = field(default_factory=dict)
     output_protocol: str = "freetrack"
@@ -74,6 +75,7 @@ class Profile:
             camera_fps=data.get("camera_fps", 30),
             mirror=data.get("mirror", True),
             camera_url=data.get("camera_url", ""),
+            camera_source=data.get("camera_source", "local"),
             image_enhance=data.get("image_enhance", False),
             axes=axes,
             output_protocol=data.get("output_protocol", "freetrack"),

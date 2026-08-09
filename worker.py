@@ -2,7 +2,7 @@ import logging
 import time
 from PySide6.QtCore import QThread, Signal, QMutex, QMutexLocker
 
-from camera import Camera, CameraFrame
+from camera import Camera, WebSocketCamera, CameraFrame
 from tracker import HeadTracker, Pose
 from freetrack import FreeTrackOutput
 from udp_output import UdpOutput
@@ -37,18 +37,24 @@ class TrackingWorker(QThread):
             self._profile = profile
 
         try:
-            self._camera = Camera()
-            if not self._camera.start(
-                index=profile.camera_index,
-                width=profile.camera_width,
-                height=profile.camera_height,
-                fps=profile.camera_fps,
-                mirror=profile.mirror,
-                url=profile.camera_url,
-                enhance=profile.image_enhance,
-            ):
-                self.error_occurred.emit(t("error_camera"))
-                return
+            if profile.camera_source == "websocket":
+                self._camera = WebSocketCamera()
+                if not self._camera.start(url=profile.camera_url):
+                    self.error_occurred.emit(t("error_camera"))
+                    return
+            else:
+                self._camera = Camera()
+                if not self._camera.start(
+                    index=profile.camera_index,
+                    width=profile.camera_width,
+                    height=profile.camera_height,
+                    fps=profile.camera_fps,
+                    mirror=profile.mirror,
+                    url=profile.camera_url,
+                    enhance=profile.image_enhance,
+                ):
+                    self.error_occurred.emit(t("error_camera"))
+                    return
 
             self._tracker = HeadTracker(
                 face_hold_time=1.0,

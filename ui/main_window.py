@@ -194,7 +194,7 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(tab)
         self._cam_form = form = QFormLayout()
         self.combo_cam_type = QComboBox()
-        self.combo_cam_type.addItems([t("local_webcam"), t("ip_camera")])
+        self.combo_cam_type.addItems([t("local_webcam"), t("ip_camera"), t("websocket")])
         self.combo_cam_type.currentIndexChanged.connect(self._on_cam_type_changed)
         self._lbl_source = QLabel(t("source"))
         form.addRow(self._lbl_source, self.combo_cam_type)
@@ -534,7 +534,9 @@ class MainWindow(QMainWindow):
         self.edit_url.setText(p.camera_url)
 
         # Camera type
-        if p.camera_url:
+        if p.camera_source == "websocket":
+            self.combo_cam_type.setCurrentIndex(2)
+        elif p.camera_url:
             self.combo_cam_type.setCurrentIndex(1)
         else:
             self.combo_cam_type.setCurrentIndex(0)
@@ -563,18 +565,27 @@ class MainWindow(QMainWindow):
 
     def _on_cam_type_changed(self, index):
         is_ip = index == 1
-        self.combo_camera.setVisible(not is_ip)
-        self._lbl_camera.setVisible(not is_ip)
-        self.edit_url.setVisible(is_ip)
-        self._lbl_url.setVisible(is_ip)
-        self._ip_stats_group.setVisible(is_ip)
-        self.preview_label.setVisible(not is_ip)
+        is_ws = index == 2
+        self.combo_camera.setVisible(not is_ip and not is_ws)
+        self._lbl_camera.setVisible(not is_ip and not is_ws)
+        self.edit_url.setVisible(is_ip or is_ws)
+        self._lbl_url.setVisible(is_ip or is_ws)
+        self._ip_stats_group.setVisible(is_ip or is_ws)
+        self.preview_label.setVisible(not is_ip and not is_ws)
+        if is_ws:
+            self.edit_url.setPlaceholderText("ws://192.168.1.100:8080")
+            self._lbl_url.setText(t("ws_url"))
+        elif is_ip:
+            self.edit_url.setPlaceholderText("rtsp://192.168.1.100:554/stream")
+            self._lbl_url.setText(t("url"))
 
     def _on_protocol_changed(self, index):
         self._udp_widget.setVisible(not IS_WINDOWS or index == 1)
 
     def _read_profile_from_ui(self) -> Profile:
-        is_ip = self.combo_cam_type.currentIndex() == 1
+        cam_type = self.combo_cam_type.currentIndex()
+        camera_source = ["local", "ip", "websocket"][cam_type]
+        is_ip_or_ws = cam_type in (1, 2)
         # Determine protocol
         if IS_WINDOWS:
             protocol = "freetrack" if self.combo_protocol.currentIndex() == 0 else "udp"
@@ -587,7 +598,8 @@ class MainWindow(QMainWindow):
             camera_height=self.spin_height.value(),
             camera_fps=self.spin_fps.value(),
             mirror=self.chk_mirror.isChecked(),
-            camera_url=self.edit_url.text().strip() if is_ip else "",
+            camera_url=self.edit_url.text().strip() if is_ip_or_ws else "",
+            camera_source=camera_source,
             image_enhance=self.chk_enhance.isChecked(),
             output_protocol=protocol,
             udp_host=self.edit_udp_host.text().strip() or "127.0.0.1",

@@ -1,6 +1,7 @@
 import logging
 import sys
 import time
+import threading
 import cv2
 import numpy as np
 from dataclasses import dataclass
@@ -206,3 +207,110 @@ class Camera:
         l = self._clahe.apply(l)
         enhanced = cv2.merge([l, a, b])
         return cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
+
+
+class WebSocketCamera:
+    def __init__(self):
+        self._ws = None
+        self._thread: threading.Thread | None = None
+        self._running = False
+        self._frame: np.ndarray | None = None
+        self._lock = threading.Lock()
+        self._url: str = ""
+        self._stats = CameraStats()
+
+    def start(self, url: str) -> bool:
+        try:
+            import websocket
+        except ImportError:
+            log.error("websocket-client library not installed. Run: pip install websocket-client")
+            return False
+
+        self._url = url
+        self._running = True
+        self._thread = threading.Thread(target=self._receive_loop, daemon=True)
+        self._thread.start()
+        log.info(f"WebSocket camera started: {url}")
+        return True
+
+    def _receive_loop(self):
+        import websocket
+        import base64
+        import json
+
+        def on_message(ws, message):
+            try:
+                if isinstance(message, bytes):
+                    buf = np.frombuffer(message, dtype=np.uint8)
+                    frame = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+                else:
+                    data = json.loads(message)
+                    if "image" in data:
+                        img_bytes = base64.b64decode(data["image"])
+                        buf = np.frombuffer(img_bytes, dtype=np.uint8)
+                        frame = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+                    else:
+                        return
+                if frame is not None:
+                    with self._lock:
+                        self._frame = frame
+                        self._stats.total_frames += 1
+                        h, w = frame.shape[:2]
+                        self._stats.resolution = f"{w}x{h}"
+            except Exception as e:
+                log.warning(f"WebSocket frame decode error: {e}")
+
+        def on_error(ws, error):
+            log.error(f"WebSocket error: {error}")
+
+        def on_close(ws, close_status_code, close_msg):
+            log.info(f"WebSocket closed: {close_status_code} {close_msg}")
+            self._running = False
+
+        def on_open(ws):
+            log.info("WebSocket connected")
+
+        try:
+            ws = websocket.WebSocketApp(
+                self._url,
+                on_message=on_message,
+                on_error=on_error,
+                on_close=on_close,
+                on_open=on_open,
+            )
+            self._ws = ws
+            ws.run_forever(sslopt={"cert_reqs": 0})
+        except Exception as e:
+            log.error(f"WebSocket connection failed: {e}")
+            self._running = False
+
+    def read(self) -> CameraFrame | None:
+        if not self._running or self._frame is None:
+            return None
+        with self._lock:
+            frame = self._frame.copy()
+        h, w = frame.shape[:2]
+        return CameraFrame(image=frame, timestamp=time.perf_counter(), width=w, height=h)
+
+    def stop(self):
+        self._running = False
+        if self._ws:
+            try:
+                self._ws.close()
+            except Exception:
+                pass
+            self._ws = None
+        if self._thread:
+            self._thread.join(timeout=2.0)
+            self._thread = None
+        self._frame = None
+        self._url = ""
+        log.info("WebSocket camera stopped")
+
+    @property
+    def is_running(self) -> bool:
+        return self._running and self._frame is not None
+
+    @property
+    def stats(self) -> CameraStats:
+        return self._stats

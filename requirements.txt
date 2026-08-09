@@ -1,0 +1,6 @@
+mediapipe
+opencv-python
+PySide6
+numpy
+pynput
+websocket-client

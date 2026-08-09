@@ -60,7 +60,7 @@ echo [3/3] Installing dependencies...
 echo.
 
 %PYTHON% -m pip install --upgrade pip
-%PYTHON% -m pip install mediapipe opencv-python PySide6 numpy pynput
+%PYTHON% -m pip install mediapipe opencv-python PySide6 numpy pynput websocket-client
 
 if %errorlevel% neq 0 (
     echo.
