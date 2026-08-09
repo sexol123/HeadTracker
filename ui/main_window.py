@@ -9,12 +9,13 @@ from PySide6.QtWidgets import (
     QTabWidget, QTextEdit, QLineEdit, QMessageBox,
     QFileDialog, QScrollArea,
 )
-from PySide6.QtCore import Qt, QTimer, Slot
+from PySide6.QtCore import Qt, QTimer, Slot, QEvent
 from PySide6.QtGui import QImage, QPixmap, QFont
 
 from camera import Camera
 from tracker import HeadTracker, Pose
-from freetrack import FreeTrackOutput
+from freetrack import FreeTrackOutput, IS_WINDOWS
+from udp_output import UdpOutput
 from config import (
     Profile, AxisConfig, AppSettings,
     load_profile, save_profile,
@@ -54,7 +55,7 @@ class MainWindow(QMainWindow):
         self.app_settings = load_settings()
         self.camera = Camera()
         self.tracker = HeadTracker(face_hold_time=1.0, confidence_threshold=0.3)
-        self.ft_output = FreeTrackOutput()
+        self._output = None  # will be FreeTrackOutput or UdpOutput
         self.tracking_active = False
         self.center_pose = Pose()
         self.current_pose = Pose()
@@ -64,6 +65,7 @@ class MainWindow(QMainWindow):
         self.display_fps = 0.0
         self._last_landmarks = None
         self._current_profile_path: Path | None = None
+        self._was_minimized = False
 
         self._init_ui()
         self._populate_profiles()
@@ -131,28 +133,25 @@ class MainWindow(QMainWindow):
         self.btn_save.setFixedWidth(80)
         self.btn_save.clicked.connect(self._on_save)
         sel_layout.addWidget(self.btn_save)
-        self.btn_reset_defaults = QPushButton("Reset Defaults")
-        self.btn_reset_defaults.setFixedWidth(120)
-        self.btn_reset_defaults.clicked.connect(self._on_reset_defaults)
-        sel_layout.addWidget(self.btn_reset_defaults)
         layout.addLayout(sel_layout)
 
         act_layout = QHBoxLayout()
-        btn_new = QPushButton("New")
-        btn_new.clicked.connect(self._on_profile_new)
-        act_layout.addWidget(btn_new)
+        self.btn_new = QPushButton("New")
+        self.btn_new.clicked.connect(self._on_profile_new)
+        act_layout.addWidget(self.btn_new)
         btn_delete = QPushButton("Delete")
         btn_delete.clicked.connect(self._on_profile_delete)
         act_layout.addWidget(btn_delete)
-        btn_duplicate = QPushButton("Duplicate")
-        btn_duplicate.clicked.connect(self._on_profile_duplicate)
-        act_layout.addWidget(btn_duplicate)
-        btn_export = QPushButton("Export")
-        btn_export.clicked.connect(self._on_profile_export)
-        act_layout.addWidget(btn_export)
-        btn_import = QPushButton("Import")
-        btn_import.clicked.connect(self._on_profile_import)
-        act_layout.addWidget(btn_import)
+        self.btn_delete = btn_delete
+        self.btn_duplicate = QPushButton("Duplicate")
+        self.btn_duplicate.clicked.connect(self._on_profile_duplicate)
+        act_layout.addWidget(self.btn_duplicate)
+        self.btn_export = QPushButton("Export")
+        self.btn_export.clicked.connect(self._on_profile_export)
+        act_layout.addWidget(self.btn_export)
+        self.btn_import = QPushButton("Import")
+        self.btn_import.clicked.connect(self._on_profile_import)
+        act_layout.addWidget(self.btn_import)
         layout.addLayout(act_layout)
         layout.addStretch()
         self.tabs.addTab(tab, "Profile")
@@ -201,7 +200,7 @@ class MainWindow(QMainWindow):
         self.combo_cam_type.currentIndexChanged.connect(self._on_cam_type_changed)
         form.addRow("Source:", self.combo_cam_type)
         self.combo_camera = QComboBox()
-        cameras = Camera.list_cameras()
+        cameras = Camera.list_cameras(max_count=5)
         for cam in cameras:
             self.combo_camera.addItem(
                 f"Camera {cam['index']} ({cam['width']}x{cam['height']})", cam["index"])
@@ -272,9 +271,23 @@ class MainWindow(QMainWindow):
     def _build_output_tab(self):
         tab = QWidget(); layout = QVBoxLayout(tab)
         form = QFormLayout()
-        self.combo_protocol = QComboBox(); self.combo_protocol.addItems(["FreeTrack", "UDP"])
+        self.combo_protocol = QComboBox()
+        protocols = ["FreeTrack (Windows)", "UDP (Cross-platform)"] if IS_WINDOWS else ["UDP"]
+        self.combo_protocol.addItems(protocols)
+        self.combo_protocol.currentIndexChanged.connect(self._on_protocol_changed)
         form.addRow("Protocol:", self.combo_protocol)
-        self.lbl_ft_status = QLabel("Not running"); form.addRow("FreeTrack:", self.lbl_ft_status)
+        self.lbl_ft_status = QLabel("Not running"); form.addRow("Status:", self.lbl_ft_status)
+
+        # UDP settings
+        self._udp_widget = QWidget()
+        udp_form = QFormLayout(self._udp_widget)
+        udp_form.setContentsMargins(0, 0, 0, 0)
+        self.edit_udp_host = QLineEdit("127.0.0.1")
+        udp_form.addRow("Host:", self.edit_udp_host)
+        self.spin_udp_port = QSpinBox(); self.spin_udp_port.setRange(1, 65535); self.spin_udp_port.setValue(4242)
+        udp_form.addRow("Port:", self.spin_udp_port)
+        layout.addWidget(self._udp_widget)
+
         layout.addLayout(form); layout.addStretch()
         self.tabs.addTab(tab, "Output")
 
@@ -358,6 +371,15 @@ class MainWindow(QMainWindow):
                 widgets["inverted"].setChecked(ax.inverted)
         self.lbl_profile.setText(p.name)
 
+        # Output protocol
+        if IS_WINDOWS:
+            self.combo_protocol.setCurrentIndex(0 if p.output_protocol == "freetrack" else 1)
+        else:
+            self.combo_protocol.setCurrentIndex(0)
+        self._on_protocol_changed(self.combo_protocol.currentIndex())
+        self.edit_udp_host.setText(p.udp_host)
+        self.spin_udp_port.setValue(p.udp_port)
+
     def _on_cam_type_changed(self, index):
         is_ip = index == 1
         self.combo_camera.setVisible(not is_ip)
@@ -367,8 +389,16 @@ class MainWindow(QMainWindow):
         self._ip_stats_group.setVisible(is_ip)
         self.preview_label.setVisible(not is_ip)
 
+    def _on_protocol_changed(self, index):
+        self._udp_widget.setVisible(not IS_WINDOWS or index == 1)
+
     def _read_profile_from_ui(self) -> Profile:
         is_ip = self.combo_cam_type.currentIndex() == 1
+        # Determine protocol
+        if IS_WINDOWS:
+            protocol = "freetrack" if self.combo_protocol.currentIndex() == 0 else "udp"
+        else:
+            protocol = "udp"
         p = Profile(
             name=self.profile.name,
             camera_index=self.combo_camera.currentData() or 0,
@@ -378,7 +408,9 @@ class MainWindow(QMainWindow):
             mirror=self.chk_mirror.isChecked(),
             camera_url=self.edit_url.text().strip() if is_ip else "",
             image_enhance=self.chk_enhance.isChecked(),
-            output_protocol="freetrack",
+            output_protocol=protocol,
+            udp_host=self.edit_udp_host.text().strip() or "127.0.0.1",
+            udp_port=self.spin_udp_port.value(),
             hotkeys=self.profile.hotkeys.copy(),
         )
         for name, widgets in self._axis_widgets.items():
@@ -429,17 +461,6 @@ class MainWindow(QMainWindow):
             log.error(f"Failed to save profile: {e}", exc_info=True)
             QMessageBox.warning(self, "Error", f"Failed to save profile:\n{e}")
 
-    def _on_reset_defaults(self):
-        reply = QMessageBox.question(
-            self, "Reset Defaults",
-            "Reset all settings to factory defaults?",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
-        if reply == QMessageBox.Yes:
-            self.profile = Profile()
-            self._apply_profile()
-            self._update_buttons_for_default()
-            log.info("Settings reset to defaults")
-
     def _on_profile_new(self):
         from PySide6.QtWidgets import QInputDialog
         name, ok = QInputDialog.getText(self, "New Profile", "Profile name:")
@@ -474,6 +495,8 @@ class MainWindow(QMainWindow):
             self._populate_profiles()
             if self.combo_profile.count() > 0:
                 self.combo_profile.setCurrentIndex(0)
+            self.profile = load_profile(self.combo_profile.currentData())
+            self._update_buttons_for_default()
 
     def _on_profile_duplicate(self):
         from PySide6.QtWidgets import QInputDialog
@@ -520,7 +543,6 @@ class MainWindow(QMainWindow):
     def _init_timer(self):
         self.timer = QTimer()
         self.timer.timeout.connect(self._process_frame)
-        self.timer.start(16)
 
     def _process_frame(self):
         if not self.tracking_active:
@@ -545,9 +567,9 @@ class MainWindow(QMainWindow):
             mapped = self._apply_mapping(corrected)
             self.current_pose = mapped
 
-            if self.ft_output._running and mapped.confidence >= 0.3:
-                self.ft_output.send_pose(yaw=mapped.yaw, pitch=mapped.pitch, roll=mapped.roll,
-                                         x=mapped.x, y=mapped.y, z=mapped.z)
+            if self._output and mapped.confidence >= 0.3:
+                self._output.send_pose(yaw=mapped.yaw, pitch=mapped.pitch, roll=mapped.roll,
+                                       x=mapped.x, y=mapped.y, z=mapped.z)
             self._update_display(mapped, frame.image)
         except Exception as e:
             log.error(f"Frame processing error: {e}", exc_info=True)
@@ -568,22 +590,21 @@ class MainWindow(QMainWindow):
                      confidence=pose.confidence, timestamp=pose.timestamp)
 
     def _draw_overlay(self, frame, pose):
-        overlay = frame.copy()
-        h, w = overlay.shape[:2]
+        h, w = frame.shape[:2]
         if self._last_landmarks is not None:
             landmarks = self._last_landmarks
             for i, j in self.FACE_MESH_TESSELATION:
                 if i < len(landmarks) and j < len(landmarks):
                     pt1 = (int(landmarks[i].x * w), int(landmarks[i].y * h))
                     pt2 = (int(landmarks[j].x * w), int(landmarks[j].y * h))
-                    cv2.line(overlay, pt1, pt2, (0, 180, 0), 1, cv2.LINE_AA)
+                    cv2.line(frame, pt1, pt2, (0, 180, 0), 1, cv2.LINE_AA)
             key_indices = [1, 152, 33, 263, 61, 291, 10, 338, 297, 332, 284, 251,
                            389, 356, 454, 323, 361, 288, 397, 365, 379, 378, 400, 377]
             for idx in key_indices:
                 if idx < len(landmarks):
-                    cv2.circle(overlay, (int(landmarks[idx].x * w), int(landmarks[idx].y * h)), 2, (0, 255, 0), -1, cv2.LINE_AA)
+                    cv2.circle(frame, (int(landmarks[idx].x * w), int(landmarks[idx].y * h)), 2, (0, 255, 0), -1, cv2.LINE_AA)
             if 1 < len(landmarks):
-                cv2.circle(overlay, (int(landmarks[1].x * w), int(landmarks[1].y * h)), 5, (0, 0, 255), -1, cv2.LINE_AA)
+                cv2.circle(frame, (int(landmarks[1].x * w), int(landmarks[1].y * h)), 5, (0, 0, 255), -1, cv2.LINE_AA)
 
         if pose.confidence > 0:
             if self._last_landmarks and len(self._last_landmarks) > 1:
@@ -595,19 +616,19 @@ class MainWindow(QMainWindow):
             yaw_rad = math.radians(pose.yaw)
             pitch_rad = math.radians(pose.pitch)
             roll_rad = math.radians(pose.roll)
-            cv2.arrowedLine(overlay, (ox, oy), (ox + int(axis_len * math.sin(yaw_rad)), oy), (0, 0, 255), 2, tipLength=0.3)
-            cv2.arrowedLine(overlay, (ox, oy), (ox, oy - int(axis_len * math.sin(pitch_rad))), (0, 255, 0), 2, tipLength=0.3)
-            cv2.arrowedLine(overlay, (ox, oy), (ox + int(axis_len * math.sin(roll_rad) * 0.7), oy + int(axis_len * math.cos(roll_rad) * 0.7)), (255, 0, 0), 2, tipLength=0.3)
-            cv2.putText(overlay, f"Y:{pose.yaw:+.1f} P:{pose.pitch:+.1f} R:{pose.roll:+.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1, cv2.LINE_AA)
-            cv2.putText(overlay, f"X:{pose.x:+.1f} Y:{pose.y:+.1f} Z:{pose.z:+.1f}", (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1, cv2.LINE_AA)
+            cv2.arrowedLine(frame, (ox, oy), (ox + int(axis_len * math.sin(yaw_rad)), oy), (0, 0, 255), 2, tipLength=0.3)
+            cv2.arrowedLine(frame, (ox, oy), (ox, oy - int(axis_len * math.sin(pitch_rad))), (0, 255, 0), 2, tipLength=0.3)
+            cv2.arrowedLine(frame, (ox, oy), (ox + int(axis_len * math.sin(roll_rad) * 0.7), oy + int(axis_len * math.cos(roll_rad) * 0.7)), (255, 0, 0), 2, tipLength=0.3)
+            cv2.putText(frame, f"Y:{pose.yaw:+.1f} P:{pose.pitch:+.1f} R:{pose.roll:+.1f}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1, cv2.LINE_AA)
+            cv2.putText(frame, f"X:{pose.x:+.1f} Y:{pose.y:+.1f} Z:{pose.z:+.1f}", (10, 55), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 1, cv2.LINE_AA)
 
         conf = pose.confidence
         bar_w, bar_h = 100, 12
         bx, by = w - bar_w - 10, 10
-        cv2.rectangle(overlay, (bx, by), (bx + bar_w, by + bar_h), (50, 50, 50), -1)
-        cv2.rectangle(overlay, (bx, by), (bx + int(bar_w * conf), by + bar_h), (0, 255, 0) if conf > 0.5 else (0, 0, 255), -1)
-        cv2.putText(overlay, f"{conf:.0%}", (bx + bar_w + 5, by + bar_h - 1), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
-        return overlay
+        cv2.rectangle(frame, (bx, by), (bx + bar_w, by + bar_h), (50, 50, 50), -1)
+        cv2.rectangle(frame, (bx, by), (bx + int(bar_w * conf), by + bar_h), (0, 255, 0) if conf > 0.5 else (0, 0, 255), -1)
+        cv2.putText(frame, f"{conf:.0%}", (bx + bar_w + 5, by + bar_h - 1), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+        return frame
 
     def _update_display(self, pose, frame):
         try:
@@ -639,7 +660,7 @@ class MainWindow(QMainWindow):
             h, w, ch = rgb.shape
             qimg = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888)
             pixmap = QPixmap.fromImage(qimg)
-            scaled = pixmap.scaled(self.preview_label.size(), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            scaled = pixmap.scaled(self.preview_label.size(), Qt.KeepAspectRatio, Qt.FastTransformation)
             self.preview_label.setPixmap(scaled)
         except Exception as e:
             log.warning(f"Display update error: {e}")
@@ -673,25 +694,36 @@ class MainWindow(QMainWindow):
             return
 
         try:
-            if self.ft_output.start():
+            # Create output based on protocol
+            if self.profile.output_protocol == "freetrack":
+                self._output = FreeTrackOutput()
+            else:
+                self._output = UdpOutput(host=self.profile.udp_host, port=self.profile.udp_port)
+
+            if self._output.start():
                 self.lbl_ft_status.setText("Running")
-                log.info("FreeTrack started")
+                log.info(f"Output started: {self.profile.output_protocol}")
             else:
                 self.lbl_ft_status.setText("Failed")
-                log.error("FreeTrack failed to start")
+                log.error(f"Output failed to start: {self.profile.output_protocol}")
         except Exception as e:
-            log.error(f"Failed to start FreeTrack: {e}", exc_info=True)
+            log.error(f"Failed to start output: {e}", exc_info=True)
             self.lbl_ft_status.setText("Failed")
 
         self.tracking_active = True
         self.btn_start.setText("Stop")
         self.lbl_status.setText("Running")
+        self._set_controls_enabled(False)
+        self.timer.start(16)
 
     def _stop_tracking(self):
         log.info("Stopping tracking...")
         self.tracking_active = False
+        self.timer.stop()
         self.camera.stop()
-        self.ft_output.stop()
+        if self._output:
+            self._output.stop()
+            self._output = None
         self.btn_start.setText("Start")
         self.lbl_status.setText("Stopped")
         self.lbl_ft_status.setText("Not running")
@@ -699,7 +731,30 @@ class MainWindow(QMainWindow):
         self.preview_label.setText("Camera preview")
         is_ip = self.combo_cam_type.currentIndex() == 1
         self.preview_label.setVisible(not is_ip)
+        self._set_controls_enabled(True)
         log.info("Tracking stopped")
+
+    def _set_controls_enabled(self, enabled: bool):
+        self.combo_profile.setEnabled(enabled)
+        self.btn_save.setEnabled(enabled)
+        self.btn_new.setEnabled(enabled)
+        self.btn_delete.setEnabled(enabled)
+        self.btn_duplicate.setEnabled(enabled)
+        self.btn_export.setEnabled(enabled)
+        self.btn_import.setEnabled(enabled)
+        self.combo_cam_type.setEnabled(enabled)
+        self.combo_camera.setEnabled(enabled)
+        self.edit_url.setEnabled(enabled)
+        self.spin_width.setEnabled(enabled)
+        self.spin_height.setEnabled(enabled)
+        self.spin_fps.setEnabled(enabled)
+        self.chk_mirror.setEnabled(enabled)
+        self.chk_enhance.setEnabled(enabled)
+        self.combo_protocol.setEnabled(enabled)
+        self.edit_udp_host.setEnabled(enabled)
+        self.spin_udp_port.setEnabled(enabled)
+        if enabled:
+            self._update_buttons_for_default()
 
     @Slot()
     def _on_center(self):
@@ -736,6 +791,20 @@ class MainWindow(QMainWindow):
     def _on_reset(self):
         self.center_pose = Pose()
         log.info("Center reset")
+
+    def changeEvent(self, event):
+        if event.type() == QEvent.Type.WindowStateChange:
+            is_minimized = bool(self.windowState() & Qt.WindowMinimized)
+            if is_minimized and not self._was_minimized:
+                if self.timer.isActive():
+                    self.timer.stop()
+                    log.debug("Timer paused (minimized)")
+            elif not is_minimized and self._was_minimized:
+                if not self.timer.isActive() and self.tracking_active:
+                    self.timer.start(16)
+                    log.debug("Timer resumed (restored)")
+            self._was_minimized = is_minimized
+        super().changeEvent(event)
 
     def closeEvent(self, event):
         try:

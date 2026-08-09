@@ -33,6 +33,8 @@ class Profile:
     image_enhance: bool = False
     axes: dict[str, AxisConfig] = field(default_factory=dict)
     output_protocol: str = "freetrack"
+    udp_host: str = "127.0.0.1"
+    udp_port: int = 4242
     hotkeys: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self):
@@ -75,6 +77,8 @@ class Profile:
             image_enhance=data.get("image_enhance", False),
             axes=axes,
             output_protocol=data.get("output_protocol", "freetrack"),
+            udp_host=data.get("udp_host", "127.0.0.1"),
+            udp_port=data.get("udp_port", 4242),
             hotkeys=data.get("hotkeys", {"center": "F12", "reset": "F11"}),
         )
 

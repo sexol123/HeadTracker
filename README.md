@@ -6,7 +6,8 @@ Head tracking software for racing and flight simulators. Uses a regular USB webc
 
 - **6DOF head tracking** — Yaw, Pitch, Roll, X, Y, Z
 - **Webcam + IP camera** — USB webcams and RTSP/HTTP IP camera streams
-- **FreeTrack 2.0 output** — Works with Assetto Corsa, BeamNG, ETS2, DCS, and 800+ games
+- **FreeTrack 2.0 output** — Windows shared memory (Assetto Corsa, BeamNG, ETS2, DCS, 800+ games)
+- **UDP output** — Cross-platform network output (Linux, SteamOS, macOS)
 - **Live overlay** — See face mesh, landmarks, and pose axes on camera preview
 - **Fullscreen centering** — Dedicated dialog with crosshair, face status, and one-click centering
 - **Per-axis settings** — Sensitivity, deadzone, inversion for each axis
@@ -17,16 +18,17 @@ Head tracking software for racing and flight simulators. Uses a regular USB webc
 - **Occlusion handling** — Smooth pose blending when face is partially covered, prevents in-game jitter
 - **Low light enhancement** — CLAHE adaptive histogram equalization for better tracking in dim environments
 - **High DPI support** — Proper scaling on 4K, 2K, and fractional DPI monitors (125%, 150%, 200%)
+- **Multi-platform** — Windows, Linux, SteamOS
 
 ## Quick Start
 
 ### Requirements
 
-- Windows 10/11
-- Python 3.11+
+- Windows 10/11, Linux, or SteamOS
+- Python 3.9+ (3.11+ recommended)
 - USB webcam or IP camera
 
-### Install
+### Windows
 
 Run `setup.bat` — it checks Python, installs pip dependencies, and downloads the face model:
 
@@ -40,7 +42,22 @@ Or install manually:
 python -m pip install mediapipe opencv-python PySide6 numpy pynput
 ```
 
+### Linux / SteamOS
+
+```bash
+chmod +x setup.sh
+./setup.sh
+```
+
+Or install manually:
+
+```bash
+python3 -m pip install mediapipe opencv-python PySide6 numpy pynput
+```
+
 ### Run
+
+**Windows:**
 
 ```bash
 start.bat              # Normal mode (no file logging)
@@ -48,7 +65,14 @@ start.bat -debug       # Debug mode (file + console logging)
 start_debug.bat        # Shortcut for debug mode
 ```
 
-Or directly:
+**Linux / SteamOS:**
+
+```bash
+./start.sh             # Normal mode
+./start_debug.sh       # Debug mode
+```
+
+**Any platform (direct):**
 
 ```bash
 python main.py              # Normal mode
@@ -95,7 +119,23 @@ For dim environments, enable CLAHE image enhancement:
 1. Camera tab → check `Enhance low light (CLAHE)`
 2. Adaptive histogram equalization improves face detection in poor lighting
 
+### Output Protocols
+
+| Protocol | Platform | Use case |
+|----------|----------|----------|
+| FreeTrack | Windows | 800+ sim racing/flight games via shared memory |
+| UDP | All | Cross-platform network output, games that support UDP trackers |
+
+### Linux / SteamOS Notes
+
+- FreeTrack shared memory is Windows-only — use **UDP output** on Linux
+- Camera uses V4L2 backend (default on Linux)
+- Face detection model downloaded by `setup.sh`
+- SteamOS: run in desktop mode for camera access
+
 ## Supported Games
+
+### Windows (FreeTrack)
 
 Any game that supports FreeTrack or TrackIR protocol:
 
@@ -110,18 +150,26 @@ Any game that supports FreeTrack or TrackIR protocol:
 | War Thunder | `war_thunder.json` |
 | WRC | `wrc.json` |
 
+### Linux / SteamOS (UDP)
+
+Use UDP output in games that support UDP head tracking (e.g., through opentrack UDP receiver).
+
 ## Project Structure
 
 ```
 HeadTracker/
 ├── main.py                # Entry point, logging setup
-├── setup.bat               # First-run setup (Python check, deps, model)
-├── start.bat               # Launch script (forwards args)
-├── start_debug.bat         # Launch with debug logging
+├── setup.bat              # Windows first-run setup
+├── setup.sh               # Linux/SteamOS first-run setup
+├── start.bat              # Windows launch script
+├── start.sh               # Linux/SteamOS launch script
+├── start_debug.bat        # Windows debug launch
+├── start_debug.sh         # Linux/SteamOS debug launch
 ├── camera.py              # Webcam + IP camera capture, frame stats
 ├── tracker.py             # MediaPipe FaceLandmarker + PnP head pose
 ├── filter.py              # One Euro Filter, Exponential, Passthrough
-├── freetrack.py           # FreeTrack 2.0 shared memory via ctypes
+├── freetrack.py           # FreeTrack 2.0 shared memory (Windows-only)
+├── udp_output.py          # UDP output (cross-platform)
 ├── config.py              # Profile, AxisConfig, AppSettings, JSON I/O
 ├── ui/
 │   ├── main_window.py     # PySide6 GUI, overlay, profile management

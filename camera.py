@@ -1,8 +1,11 @@
 import logging
+import sys
 import time
 import cv2
 import numpy as np
 from dataclasses import dataclass
+
+IS_WINDOWS = sys.platform == "win32"
 
 log = logging.getLogger("camera")
 
@@ -44,7 +47,8 @@ class Camera:
         cameras = []
         for i in range(max_count):
             try:
-                cap = cv2.VideoCapture(i, cv2.CAP_DSHOW)
+                # DirectShow only on Windows; Linux uses default backend (V4L2)
+                cap = cv2.VideoCapture(i, cv2.CAP_DSHOW) if IS_WINDOWS else cv2.VideoCapture(i)
                 if cap.isOpened():
                     w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
                     h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -90,7 +94,8 @@ class Camera:
 
         self._index = index
         log.info(f"Opening local camera index={index}, {width}x{height}@{fps}fps")
-        self._cap = cv2.VideoCapture(index, cv2.CAP_DSHOW)
+        # DirectShow only on Windows; Linux uses default backend (V4L2)
+        self._cap = cv2.VideoCapture(index, cv2.CAP_DSHOW) if IS_WINDOWS else cv2.VideoCapture(index)
         if not self._cap.isOpened():
             self._cap = cv2.VideoCapture(index)
             if not self._cap.isOpened():

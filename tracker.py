@@ -87,14 +87,14 @@ class HeadTracker:
 
         # Smooth confidence: fast rise, slow fall
         self._confidence_smoother = AdaptiveExponentialFilter(
-            rise_alpha=0.8,  # Fast recovery when face returns
-            fall_alpha=0.05,  # Slow decay when face is lost
+            rise_alpha=0.8,
+            fall_alpha=0.05,
         )
         self._raw_confidence: float = 0.0
 
         # Pose blending state
         self._blend_pose = Pose()
-        self._blend_alpha: float = 0.0  # 0 = fully last_valid, 1 = fully current
+        self._blend_alpha: float = 0.0
 
     def get_last_landmarks(self):
         return self._last_landmarks
