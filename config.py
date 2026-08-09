@@ -16,10 +16,6 @@ class AxisConfig:
     deadzone: float = 2.0
     inverted: bool = False
 
-    def __post_init__(self):
-        self.sensitivity = max(0.1, min(20.0, self.sensitivity))
-        self.deadzone = max(0.0, min(30.0, self.deadzone))
-
 
 @dataclass
 class Profile:
