@@ -1,0 +1,49 @@
+# Third-Party Licenses
+
+## MediaPipe
+- License: Apache License 2.0
+- Website: https://google.github.io/mediapipe/
+- Usage: Face landmark detection (468 points)
+- Copyright: Google LLC
+
+## OpenCV
+- License: Apache License 2.0
+- Website: https://opencv.org/
+- Usage: Camera capture, image processing, PnP head pose estimation
+- Copyright: Intel Corporation, Willow Garage, Itseez
+
+## PySide6
+- License: LGPL v3
+- Website: https://doc.qt.io/qtforpython-6/
+- Usage: GUI framework
+- Copyright: The Qt Company
+
+## NumPy
+- License: BSD License
+- Website: https://numpy.org/
+- Usage: Numerical array operations
+- Copyright: NumPy Developers
+
+## pynput
+- License: LGPL v3
+- Website: https://pypi.org/project/pynput/
+- Usage: Global hotkey registration
+- Copyright: Konstantin Lepeshenkov
+
+---
+
+### License Texts
+
+#### Apache License 2.0
+A permissive license whose main conditions require preservation of copyright
+and license notices. Licensed works, modifications, and larger works may be
+distributed under different terms and without source code.
+
+#### GNU Lesser General Public License v3 (LGPL-3.0)
+A free software license that allows linking with proprietary software.
+Software combined with LGPL libraries can be distributed under any license,
+provided the LGPL parts remain under LGPL.
+
+#### BSD License
+A permissive license similar to MIT but with different attribution requirements.
+Allows commercial use, modification, and distribution with proper attribution.

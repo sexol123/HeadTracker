@@ -1,0 +1,19 @@
+{
+  "name": "Assetto Corsa",
+  "camera_index": 0,
+  "camera_width": 640,
+  "camera_height": 480,
+  "camera_fps": 30,
+  "mirror": true,
+  "camera_url": "",
+  "axes": {
+    "yaw": { "enabled": true, "sensitivity": 6.0, "deadzone": 2.0, "inverted": false },
+    "pitch": { "enabled": true, "sensitivity": 6.0, "deadzone": 2.0, "inverted": false },
+    "roll": { "enabled": true, "sensitivity": 4.0, "deadzone": 1.0, "inverted": false },
+    "x": { "enabled": true, "sensitivity": 1.0, "deadzone": 1.0, "inverted": false },
+    "y": { "enabled": true, "sensitivity": 1.0, "deadzone": 1.0, "inverted": false },
+    "z": { "enabled": true, "sensitivity": 1.5, "deadzone": 2.0, "inverted": false }
+  },
+  "output_protocol": "freetrack",
+  "hotkeys": { "center": "F12", "reset": "F11" }
+}
