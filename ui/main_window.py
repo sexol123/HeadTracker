@@ -9,13 +9,13 @@ from PySide6.QtWidgets import (
     QTabWidget, QTextEdit, QLineEdit, QMessageBox,
     QFileDialog, QScrollArea,
 )
-from PySide6.QtCore import Qt, QTimer, Slot, QEvent
+from PySide6.QtCore import Qt, Slot
 from PySide6.QtGui import QImage, QPixmap, QFont
 
+from worker import TrackingWorker
 from camera import Camera
-from tracker import HeadTracker, Pose
-from freetrack import FreeTrackOutput, IS_WINDOWS
-from udp_output import UdpOutput
+from tracker import Pose
+from freetrack import IS_WINDOWS
 from config import (
     Profile, AxisConfig, AppSettings,
     load_profile, save_profile,
@@ -53,9 +53,12 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.profile = profile
         self.app_settings = load_settings()
-        self.camera = Camera()
-        self.tracker = HeadTracker(face_hold_time=1.0, confidence_threshold=0.3)
-        self._output = None  # will be FreeTrackOutput or UdpOutput
+        self.worker = TrackingWorker()
+        self.worker.frame_ready.connect(self._on_worker_frame)
+        self.worker.pose_ready.connect(self._on_worker_pose)
+        self.worker.confidence_ready.connect(self._on_worker_confidence)
+        self.worker.error_occurred.connect(self._on_worker_error)
+        self.worker.stopped.connect(self._on_worker_stopped)
         self.tracking_active = False
         self.center_pose = Pose()
         self.current_pose = Pose()
@@ -70,7 +73,6 @@ class MainWindow(QMainWindow):
         self._init_ui()
         self._populate_profiles()
         self._apply_profile()
-        self._init_timer()
 
     def _init_ui(self):
         self.setWindowTitle("HeadTracker v0.1")
@@ -540,54 +542,59 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Error", f"Failed to import profile:\n{e}")
 
     # ── Tracking ─────────────────────────────────────────────────
-    def _init_timer(self):
-        self.timer = QTimer()
-        self.timer.timeout.connect(self._process_frame)
-
-    def _process_frame(self):
-        if not self.tracking_active:
-            return
+    @Slot(object)
+    def _on_worker_frame(self, frame):
         try:
-            frame = self.camera.get_frame()
-            if frame is None:
-                return
-            pose = self.tracker.process_frame(frame.image, frame.timestamp, frame.width, frame.height)
-            self.raw_pose = pose
-            self._last_landmarks = self.tracker.get_last_landmarks()
-
-            corrected = Pose(
-                yaw=pose.yaw - self.center_pose.yaw,
-                pitch=pose.pitch - self.center_pose.pitch,
-                roll=pose.roll - self.center_pose.roll,
-                x=pose.x - self.center_pose.x,
-                y=pose.y - self.center_pose.y,
-                z=pose.z - self.center_pose.z,
-                confidence=pose.confidence, timestamp=pose.timestamp)
-
-            mapped = self._apply_mapping(corrected)
-            self.current_pose = mapped
-
-            if self._output and mapped.confidence >= 0.3:
-                self._output.send_pose(yaw=mapped.yaw, pitch=mapped.pitch, roll=mapped.roll,
-                                       x=mapped.x, y=mapped.y, z=mapped.z)
-            self._update_display(mapped, frame.image)
+            self._last_landmarks = self.worker._tracker.get_last_landmarks() if self.worker._tracker else None
+            display_frame = self._draw_overlay(frame.image, self.current_pose)
+            rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
+            h, w, ch = rgb.shape
+            qimg = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888)
+            pixmap = QPixmap.fromImage(qimg)
+            scaled = pixmap.scaled(self.preview_label.size(), Qt.KeepAspectRatio, Qt.FastTransformation)
+            self.preview_label.setPixmap(scaled)
         except Exception as e:
-            log.error(f"Frame processing error: {e}", exc_info=True)
+            log.warning(f"Display update error: {e}")
 
-    def _apply_mapping(self, pose: Pose) -> Pose:
-        axes = self.profile.axes
-        def map_axis(value, name):
-            cfg = axes.get(name)
-            if cfg is None or not cfg.enabled: return 0.0
-            v = value
-            if cfg.inverted: v = -v
-            if abs(v) < cfg.deadzone: v = 0.0
-            v *= cfg.sensitivity
-            return v
-        return Pose(yaw=map_axis(pose.yaw, "yaw"), pitch=map_axis(pose.pitch, "pitch"),
-                     roll=map_axis(pose.roll, "roll"), x=map_axis(pose.x, "x"),
-                     y=map_axis(pose.y, "y"), z=map_axis(pose.z, "z"),
-                     confidence=pose.confidence, timestamp=pose.timestamp)
+    @Slot(object)
+    def _on_worker_pose(self, pose):
+        self.current_pose = pose
+        self.lbl_yaw.setText(f"{pose.yaw:+.2f}")
+        self.lbl_pitch.setText(f"{pose.pitch:+.2f}")
+        self.lbl_roll.setText(f"{pose.roll:+.2f}")
+        self.lbl_x.setText(f"{pose.x:+.1f}")
+        self.lbl_y.setText(f"{pose.y:+.1f}")
+        self.lbl_z.setText(f"{pose.z:+.1f}")
+
+    @Slot(float)
+    def _on_worker_confidence(self, confidence):
+        self.lbl_confidence.setText(f"{confidence:.2f}")
+        self.frame_count += 1
+        now = time.perf_counter()
+        if now - self.last_fps_time >= 1.0:
+            self.display_fps = self.frame_count / (now - self.last_fps_time)
+            self.frame_count = 0
+            self.last_fps_time = now
+            self.lbl_fps.setText(f"{self.display_fps:.0f}")
+
+    @Slot(str)
+    def _on_worker_error(self, msg):
+        log.error(f"Worker error: {msg}")
+        self.lbl_status.setText("Error!")
+        QMessageBox.warning(self, "Error", msg)
+
+    @Slot()
+    def _on_worker_stopped(self):
+        self.tracking_active = False
+        self.btn_start.setText("Start")
+        self.lbl_status.setText("Stopped")
+        self.lbl_ft_status.setText("Not running")
+        self.preview_label.clear()
+        self.preview_label.setText("Camera preview")
+        is_ip = self.combo_cam_type.currentIndex() == 1
+        self.preview_label.setVisible(not is_ip)
+        self._set_controls_enabled(True)
+        log.info("Tracking stopped")
 
     def _draw_overlay(self, frame, pose):
         h, w = frame.shape[:2]
@@ -630,41 +637,6 @@ class MainWindow(QMainWindow):
         cv2.putText(frame, f"{conf:.0%}", (bx + bar_w + 5, by + bar_h - 1), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
         return frame
 
-    def _update_display(self, pose, frame):
-        try:
-            self.lbl_yaw.setText(f"{pose.yaw:+.2f}")
-            self.lbl_pitch.setText(f"{pose.pitch:+.2f}")
-            self.lbl_roll.setText(f"{pose.roll:+.2f}")
-            self.lbl_x.setText(f"{pose.x:+.1f}")
-            self.lbl_y.setText(f"{pose.y:+.1f}")
-            self.lbl_z.setText(f"{pose.z:+.1f}")
-            self.lbl_confidence.setText(f"{pose.confidence:.2f}")
-            self.frame_count += 1
-            now = time.perf_counter()
-            if now - self.last_fps_time >= 1.0:
-                self.display_fps = self.frame_count / (now - self.last_fps_time)
-                self.frame_count = 0
-                self.last_fps_time = now
-                self.lbl_fps.setText(f"{self.display_fps:.0f}")
-
-                # Update IP camera stats
-                if self.camera.url and self._ip_stats_group.isVisible():
-                    stats = self.camera.stats
-                    self.lbl_ip_fps.setText(f"{stats.fps:.1f}")
-                    self.lbl_ip_frame_time.setText(f"{stats.frame_time_ms:.1f} ms")
-                    self.lbl_ip_bandwidth.setText(f"{stats.bandwidth_mbps:.2f} Mbps")
-                    self.lbl_ip_resolution.setText(stats.resolution)
-                    self.lbl_ip_frames.setText(f"{stats.total_frames} ({stats.dropped_frames} dropped)")
-            display_frame = self._draw_overlay(frame, pose)
-            rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
-            h, w, ch = rgb.shape
-            qimg = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888)
-            pixmap = QPixmap.fromImage(qimg)
-            scaled = pixmap.scaled(self.preview_label.size(), Qt.KeepAspectRatio, Qt.FastTransformation)
-            self.preview_label.setPixmap(scaled)
-        except Exception as e:
-            log.warning(f"Display update error: {e}")
-
     @Slot()
     def _on_start_stop(self):
         if self.tracking_active: self._stop_tracking()
@@ -673,57 +645,17 @@ class MainWindow(QMainWindow):
     def _start_tracking(self):
         self.profile = self._read_profile_from_ui()
         log.info(f"Starting tracking: {self.profile.name}")
-
-        try:
-            if not self.camera.start(
-                index=self.profile.camera_index,
-                width=self.profile.camera_width,
-                height=self.profile.camera_height,
-                fps=self.profile.camera_fps,
-                mirror=self.profile.mirror,
-                url=self.profile.camera_url,
-                enhance=self.profile.image_enhance,
-            ):
-                self.lbl_status.setText("Camera error!")
-                log.error("Failed to start camera")
-                return
-            log.info("Camera started")
-        except Exception as e:
-            log.error(f"Failed to start camera: {e}", exc_info=True)
-            self.lbl_status.setText("Camera error!")
-            return
-
-        try:
-            # Create output based on protocol
-            if self.profile.output_protocol == "freetrack":
-                self._output = FreeTrackOutput()
-            else:
-                self._output = UdpOutput(host=self.profile.udp_host, port=self.profile.udp_port)
-
-            if self._output.start():
-                self.lbl_ft_status.setText("Running")
-                log.info(f"Output started: {self.profile.output_protocol}")
-            else:
-                self.lbl_ft_status.setText("Failed")
-                log.error(f"Output failed to start: {self.profile.output_protocol}")
-        except Exception as e:
-            log.error(f"Failed to start output: {e}", exc_info=True)
-            self.lbl_ft_status.setText("Failed")
-
+        self.worker.start_tracking(self.profile)
         self.tracking_active = True
         self.btn_start.setText("Stop")
         self.lbl_status.setText("Running")
+        self.lbl_ft_status.setText("Running")
         self._set_controls_enabled(False)
-        self.timer.start(16)
 
     def _stop_tracking(self):
         log.info("Stopping tracking...")
+        self.worker.stop_tracking()
         self.tracking_active = False
-        self.timer.stop()
-        self.camera.stop()
-        if self._output:
-            self._output.stop()
-            self._output = None
         self.btn_start.setText("Start")
         self.lbl_status.setText("Stopped")
         self.lbl_ft_status.setText("Not running")
@@ -761,12 +693,9 @@ class MainWindow(QMainWindow):
         if not self.tracking_active:
             return
         try:
-            def safe_get_frame():
-                frame = self.camera.get_frame()
-                return frame.image if frame is not None else None
             dialog = CenterDialog(
-                get_pose_func=lambda: self.raw_pose,
-                get_frame_func=safe_get_frame,
+                get_pose_func=lambda: self.worker.get_raw_pose(),
+                get_frame_func=lambda: self.worker.get_last_frame().image if self.worker.get_last_frame() else None,
                 on_centered=self._apply_center,
             )
             dialog.exec()
@@ -785,31 +714,18 @@ class MainWindow(QMainWindow):
             y=pose.y,
             z=pose.z,
         )
+        self.worker.set_center_pose(self.center_pose)
         log.info(f"Center set: yaw={self.center_pose.yaw:+.1f} pitch={self.center_pose.pitch:+.1f} roll={self.center_pose.roll:+.1f}")
 
     @Slot()
     def _on_reset(self):
         self.center_pose = Pose()
+        self.worker.set_center_pose(Pose())
         log.info("Center reset")
-
-    def changeEvent(self, event):
-        if event.type() == QEvent.Type.WindowStateChange:
-            is_minimized = bool(self.windowState() & Qt.WindowMinimized)
-            if is_minimized and not self._was_minimized:
-                if self.timer.isActive():
-                    self.timer.stop()
-                    log.debug("Timer paused (minimized)")
-            elif not is_minimized and self._was_minimized:
-                if not self.timer.isActive() and self.tracking_active:
-                    self.timer.start(16)
-                    log.debug("Timer resumed (restored)")
-            self._was_minimized = is_minimized
-        super().changeEvent(event)
 
     def closeEvent(self, event):
         try:
             self._stop_tracking()
-            self.tracker.close()
             save_settings(self.app_settings)
         except Exception as e:
             log.error(f"Error during shutdown: {e}", exc_info=True)

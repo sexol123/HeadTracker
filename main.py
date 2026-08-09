@@ -76,8 +76,8 @@ def main():
     log = logging.getLogger("main")
 
     log.info("=== HeadTracker starting ===")
+    QApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     app = QApplication(sys.argv)
-    app.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     log.info("QApplication created")
 
     try:

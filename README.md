@@ -8,16 +8,17 @@ Head tracking software for racing and flight simulators. Uses a regular USB webc
 - **Webcam + IP camera** — USB webcams and RTSP/HTTP IP camera streams
 - **FreeTrack 2.0 output** — Windows shared memory (Assetto Corsa, BeamNG, ETS2, DCS, 800+ games)
 - **UDP output** — Cross-platform network output (Linux, SteamOS, macOS)
-- **Live overlay** — See face mesh, landmarks, and pose axes on camera preview
+- **Live overlay** — Face mesh, landmarks, and pose axes on camera preview
 - **Fullscreen centering** — Dedicated dialog with crosshair, face status, and one-click centering
 - **Per-axis settings** — Sensitivity, deadzone, inversion for each axis
 - **Game presets** — Pre-configured profiles for popular simulators
-- **Profile system** — Create, save, duplicate, export/import profiles; Default profile is immutable
+- **Profile system** — Create, save, duplicate, export/import profiles; Default is immutable
 - **Stream stats** — FPS, frame time, bandwidth, resolution, dropped frames for IP cameras
 - **Error handling** — Graceful recovery with user-facing error dialogs
-- **Occlusion handling** — Smooth pose blending when face is partially covered, prevents in-game jitter
-- **Low light enhancement** — CLAHE adaptive histogram equalization for better tracking in dim environments
+- **Occlusion handling** — Smooth pose blending when face is partially covered
+- **Low light enhancement** — CLAHE adaptive histogram equalization
 - **High DPI support** — Proper scaling on 4K, 2K, and fractional DPI monitors (125%, 150%, 200%)
+- **Threaded inference** — MediaPipe runs in background thread, UI stays responsive
 - **Multi-platform** — Windows, Linux, SteamOS
 
 ## Quick Start
@@ -83,7 +84,7 @@ python main.py -logging     # Same as -debug
 ## Usage
 
 1. **Select camera** — Camera tab, pick your webcam or enter IP camera URL
-2. **Press Start** — Tracking begins, you see face mesh overlay
+2. **Press Start** — Tracking begins, face mesh overlay appears
 3. **Press Center (F12)** — Opens fullscreen centering dialog
 4. **Launch your game** — FreeTrack data is sent automatically
 5. **Press Reset (F11)** — Returns virtual camera to center
@@ -154,20 +155,46 @@ Any game that supports FreeTrack or TrackIR protocol:
 
 Use UDP output in games that support UDP head tracking (e.g., through opentrack UDP receiver).
 
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────┐
+│  Main Thread (Qt GUI)                               │
+│                                                     │
+│  Camera preview ←── frame_ready signal              │
+│  Pose labels    ←── pose_ready signal               │
+│  Status bar     ←── confidence_ready signal         │
+│  Profile/settings UI (user interaction)             │
+│                                                     │
+│  overlay drawing (cv2) on frame from worker         │
+└──────────────────────┬──────────────────────────────┘
+                       │ signals
+┌──────────────────────┴──────────────────────────────┐
+│  Worker Thread (QThread)                            │
+│                                                     │
+│  Camera.get_frame()        ← blocking read          │
+│  HeadTracker.process_frame() ← ML inference (10-50ms)│
+│  center subtraction                                  │
+│  axis mapping (sensitivity, deadzone, inversion)     │
+│  output.send_pose() (FreeTrack / UDP)               │
+│                                                     │
+│  Runs at ~60fps with time.sleep() pacing            │
+└─────────────────────────────────────────────────────┘
+```
+
+MediaPipe inference (the most expensive operation) runs in a background thread, keeping the UI responsive during tracking. The main thread only handles UI updates and overlay drawing.
+
 ## Project Structure
 
 ```
 HeadTracker/
 ├── main.py                # Entry point, logging setup
-├── setup.bat              # Windows first-run setup
-├── setup.sh               # Linux/SteamOS first-run setup
-├── start.bat              # Windows launch script
-├── start.sh               # Linux/SteamOS launch script
-├── start_debug.bat        # Windows debug launch
-├── start_debug.sh         # Linux/SteamOS debug launch
+├── setup.bat / setup.sh   # First-run setup (Python check, deps, model)
+├── start.bat / start.sh   # Launch scripts
 ├── camera.py              # Webcam + IP camera capture, frame stats
 ├── tracker.py             # MediaPipe FaceLandmarker + PnP head pose
 ├── filter.py              # One Euro Filter, Exponential, Passthrough
+├── worker.py              # Background tracking thread (QThread)
 ├── freetrack.py           # FreeTrack 2.0 shared memory (Windows-only)
 ├── udp_output.py          # UDP output (cross-platform)
 ├── config.py              # Profile, AxisConfig, AppSettings, JSON I/O
