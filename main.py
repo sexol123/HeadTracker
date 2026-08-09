@@ -4,6 +4,11 @@ import logging
 from datetime import datetime
 from pathlib import Path
 
+# High DPI support — must be set before QApplication
+os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
+os.environ.setdefault("QT_SCALE_FACTOR_ROUNDING_POLICY", "PassThrough")
+
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from ui.main_window import MainWindow
@@ -72,6 +77,7 @@ def main():
 
     log.info("=== HeadTracker starting ===")
     app = QApplication(sys.argv)
+    app.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
     log.info("QApplication created")
 
     try:

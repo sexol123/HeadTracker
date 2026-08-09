@@ -2,7 +2,7 @@ import logging
 import time
 import cv2
 import numpy as np
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 log = logging.getLogger("camera")
 
@@ -36,6 +36,8 @@ class Camera:
         self._last_frame_time: float = 0.0
         self._frame_count: int = 0
         self._drop_count: int = 0
+        self._enhance: bool = False
+        self._clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
 
     @staticmethod
     def list_cameras(max_count: int = 10) -> list[dict]:
@@ -61,14 +63,18 @@ class Camera:
         fps: int = 30,
         mirror: bool = False,
         url: str = "",
+        enhance: bool = False,
     ) -> bool:
         self.stop()
         self._mirror = mirror
         self._url = url
+        self._enhance = enhance
         self._frame_times = []
         self._last_frame_time = 0.0
         self._frame_count = 0
         self._drop_count = 0
+        if enhance:
+            log.info("Image enhancement (CLAHE) enabled")
 
         if url:
             log.info(f"Opening IP camera: {url}")
@@ -147,6 +153,10 @@ class Camera:
         if self._mirror:
             frame = cv2.flip(frame, 1)
 
+        if self._enhance:
+            log.debug("CLAHE enhancement applied")
+            frame = self._apply_clahe(frame)
+
         return CameraFrame(
             image=frame,
             timestamp=time.perf_counter(),
@@ -179,3 +189,11 @@ class Camera:
     @property
     def stats(self) -> CameraStats:
         return self._stats
+
+    def _apply_clahe(self, frame: np.ndarray) -> np.ndarray:
+        """Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to enhance low-light images."""
+        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+        l, a, b = cv2.split(lab)
+        l = self._clahe.apply(l)
+        enhanced = cv2.merge([l, a, b])
+        return cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)

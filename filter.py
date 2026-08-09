@@ -93,9 +93,40 @@ def create_filter(filter_type: str, **kwargs):
             )
         elif filter_type == "exponential":
             return ExponentialFilter(alpha=kwargs.get("alpha", 0.5))
+        elif filter_type == "adaptive":
+            return AdaptiveExponentialFilter(
+                rise_alpha=kwargs.get("rise_alpha", 0.7),
+                fall_alpha=kwargs.get("fall_alpha", 0.1),
+            )
         else:
             log.debug(f"Unknown filter type '{filter_type}', using PassthroughFilter")
             return PassthroughFilter()
     except Exception as e:
         log.warning(f"Failed to create filter '{filter_type}': {e}, using PassthroughFilter")
         return PassthroughFilter()
+
+
+class AdaptiveExponentialFilter:
+    """Exponential filter with different speeds for rising and falling signals.
+    Fast recovery (rise_alpha) when signal returns, slow decay (fall_alpha) when lost.
+    """
+
+    def __init__(self, rise_alpha: float = 0.7, fall_alpha: float = 0.1):
+        self.rise_alpha = rise_alpha
+        self.fall_alpha = fall_alpha
+        self._prev: float | None = None
+
+    def __call__(self, value: float, timestamp: float = 0.0) -> float:
+        if self._prev is None:
+            self._prev = value
+            return value
+        if value > self._prev:
+            alpha = self.rise_alpha
+        else:
+            alpha = self.fall_alpha
+        result = alpha * value + (1.0 - alpha) * self._prev
+        self._prev = result
+        return result
+
+    def reset(self):
+        self._prev = None

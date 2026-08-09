@@ -2,7 +2,6 @@ import logging
 import time
 import math
 import cv2
-import numpy as np
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLabel, QPushButton, QComboBox, QSpinBox, QCheckBox,
@@ -10,7 +9,7 @@ from PySide6.QtWidgets import (
     QTabWidget, QTextEdit, QLineEdit, QMessageBox,
     QFileDialog, QScrollArea,
 )
-from PySide6.QtCore import Qt, QTimer, Signal, Slot
+from PySide6.QtCore import Qt, QTimer, Slot
 from PySide6.QtGui import QImage, QPixmap, QFont
 
 from camera import Camera
@@ -29,10 +28,6 @@ log = logging.getLogger("ui")
 
 
 class MainWindow(QMainWindow):
-    pose_updated = Signal(object)
-    tracking_started = Signal()
-    tracking_stopped = Signal()
-
     FACE_MESH_TESSELATION = [
         (127, 34), (34, 139), (139, 127), (11, 0), (0, 37), (37, 11),
         (232, 231), (231, 120), (120, 232), (72, 37), (37, 39), (39, 72),
@@ -58,7 +53,7 @@ class MainWindow(QMainWindow):
         self.profile = profile
         self.app_settings = load_settings()
         self.camera = Camera()
-        self.tracker = HeadTracker()
+        self.tracker = HeadTracker(face_hold_time=1.0, confidence_threshold=0.3)
         self.ft_output = FreeTrackOutput()
         self.tracking_active = False
         self.center_pose = Pose()
@@ -224,6 +219,8 @@ class MainWindow(QMainWindow):
         form.addRow("FPS:", self.spin_fps)
         self.chk_mirror = QCheckBox("Mirror")
         form.addRow("Mirror:", self.chk_mirror)
+        self.chk_enhance = QCheckBox("Enhance low light (CLAHE)")
+        form.addRow("Enhance:", self.chk_enhance)
         layout.addLayout(form)
 
         # IP camera stats (hidden by default)
@@ -311,6 +308,7 @@ class MainWindow(QMainWindow):
                 self.combo_profile.setCurrentIndex(i)
                 break
         self.combo_profile.blockSignals(False)
+        self._update_buttons_for_default()
 
     def _on_profile_changed(self, index):
         path = self.combo_profile.currentData()
@@ -325,10 +323,17 @@ class MainWindow(QMainWindow):
         except Exception as e:
             log.error(f"Failed to load profile: {e}", exc_info=True)
             QMessageBox.warning(self, "Error", f"Failed to load profile:\n{e}")
+        self._update_buttons_for_default()
+
+    def _update_buttons_for_default(self):
+        is_default = self.profile.name == "Default"
+        self.btn_save.setEnabled(not is_default)
+        self.btn_delete.setEnabled(not is_default)
 
     def _apply_profile(self):
         p = self.profile
         self.chk_mirror.setChecked(p.mirror)
+        self.chk_enhance.setChecked(p.image_enhance)
         self.spin_width.setValue(p.camera_width)
         self.spin_height.setValue(p.camera_height)
         self.spin_fps.setValue(p.camera_fps)
@@ -360,6 +365,7 @@ class MainWindow(QMainWindow):
         self.edit_url.setVisible(is_ip)
         self._lbl_url.setVisible(is_ip)
         self._ip_stats_group.setVisible(is_ip)
+        self.preview_label.setVisible(not is_ip)
 
     def _read_profile_from_ui(self) -> Profile:
         is_ip = self.combo_cam_type.currentIndex() == 1
@@ -371,6 +377,7 @@ class MainWindow(QMainWindow):
             camera_fps=self.spin_fps.value(),
             mirror=self.chk_mirror.isChecked(),
             camera_url=self.edit_url.text().strip() if is_ip else "",
+            image_enhance=self.chk_enhance.isChecked(),
             output_protocol="freetrack",
             hotkeys=self.profile.hotkeys.copy(),
         )
@@ -430,6 +437,7 @@ class MainWindow(QMainWindow):
         if reply == QMessageBox.Yes:
             self.profile = Profile()
             self._apply_profile()
+            self._update_buttons_for_default()
             log.info("Settings reset to defaults")
 
     def _on_profile_new(self):
@@ -537,7 +545,7 @@ class MainWindow(QMainWindow):
             mapped = self._apply_mapping(corrected)
             self.current_pose = mapped
 
-            if self.ft_output._running:
+            if self.ft_output._running and mapped.confidence >= 0.3:
                 self.ft_output.send_pose(yaw=mapped.yaw, pitch=mapped.pitch, roll=mapped.roll,
                                          x=mapped.x, y=mapped.y, z=mapped.z)
             self._update_display(mapped, frame.image)
@@ -653,6 +661,7 @@ class MainWindow(QMainWindow):
                 fps=self.profile.camera_fps,
                 mirror=self.profile.mirror,
                 url=self.profile.camera_url,
+                enhance=self.profile.image_enhance,
             ):
                 self.lbl_status.setText("Camera error!")
                 log.error("Failed to start camera")
@@ -679,6 +688,7 @@ class MainWindow(QMainWindow):
         self.lbl_status.setText("Running")
 
     def _stop_tracking(self):
+        log.info("Stopping tracking...")
         self.tracking_active = False
         self.camera.stop()
         self.ft_output.stop()
@@ -687,6 +697,8 @@ class MainWindow(QMainWindow):
         self.lbl_ft_status.setText("Not running")
         self.preview_label.clear()
         self.preview_label.setText("Camera preview")
+        is_ip = self.combo_cam_type.currentIndex() == 1
+        self.preview_label.setVisible(not is_ip)
         log.info("Tracking stopped")
 
     @Slot()

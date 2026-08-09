@@ -10,6 +10,8 @@ import mediapipe as mp
 from mediapipe.tasks.python import BaseOptions
 from mediapipe.tasks.python.vision import FaceLandmarker, FaceLandmarkerOptions
 
+from filter import AdaptiveExponentialFilter
+
 log = logging.getLogger("tracker")
 
 
@@ -57,7 +59,7 @@ MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "face_landmarker.
 
 
 class HeadTracker:
-    def __init__(self):
+    def __init__(self, face_hold_time: float = 1.0, confidence_threshold: float = 0.3):
         log.info("Initializing HeadTracker...")
         if not os.path.isfile(MODEL_PATH):
             raise FileNotFoundError(
@@ -79,8 +81,20 @@ class HeadTracker:
             raise RuntimeError(f"Failed to initialize face tracking model: {e}") from e
         self._last_valid_pose = Pose()
         self._face_lost_time: float = 0.0
-        self._face_lost_threshold: float = 0.5
+        self._face_hold_time: float = face_hold_time
+        self._confidence_threshold: float = confidence_threshold
         self._last_landmarks = None
+
+        # Smooth confidence: fast rise, slow fall
+        self._confidence_smoother = AdaptiveExponentialFilter(
+            rise_alpha=0.8,  # Fast recovery when face returns
+            fall_alpha=0.05,  # Slow decay when face is lost
+        )
+        self._raw_confidence: float = 0.0
+
+        # Pose blending state
+        self._blend_pose = Pose()
+        self._blend_alpha: float = 0.0  # 0 = fully last_valid, 1 = fully current
 
     def get_last_landmarks(self):
         return self._last_landmarks
@@ -103,23 +117,42 @@ class HeadTracker:
         except cv2.error as e:
             log.error(f"OpenCV error during face detection: {e}")
             self._face_lost_time = time.perf_counter()
-            return Pose(confidence=0.0, timestamp=timestamp)
+            self._raw_confidence = 0.0
+            return self._build_pose(0.0, timestamp)
         except Exception as e:
             log.error(f"Error during face detection: {e}", exc_info=True)
             self._face_lost_time = time.perf_counter()
-            return Pose(confidence=0.0, timestamp=timestamp)
+            self._raw_confidence = 0.0
+            return self._build_pose(0.0, timestamp)
 
         if not result.face_landmarks:
             self._last_landmarks = None
-            if time.perf_counter() - self._face_lost_time > self._face_lost_threshold:
-                return Pose(confidence=0.0, timestamp=timestamp)
-            pose = self._last_valid_pose.copy()
-            pose.confidence = 0.0
-            pose.timestamp = timestamp
-            return pose
+            self._raw_confidence = 0.0
+            # Check hold time before fully losing
+            elapsed = time.perf_counter() - self._face_lost_time
+            if elapsed < self._face_hold_time:
+                # Still within hold window — keep last pose but fade confidence
+                hold_frac = 1.0 - (elapsed / self._face_hold_time)
+                return self._build_pose(hold_frac, timestamp)
+            else:
+                # Hold expired — return zero with smooth confidence decay
+                return self._build_pose(0.0, timestamp)
+
+        # Face detected — reset lost timer
+        self._face_lost_time = time.perf_counter()
 
         face_landmarks = result.face_landmarks[0]
         self._last_landmarks = face_landmarks
+
+        # Calculate landmark visibility for partial occlusion detection
+        visible_count = sum(
+            1 for idx in LANDMARK_INDICES
+            if 0 <= face_landmarks[idx].x <= 1 and 0 <= face_landmarks[idx].y <= 1
+        )
+        visibility_ratio = visible_count / len(LANDMARK_INDICES)
+
+        # Raw confidence: based on landmark visibility
+        self._raw_confidence = visibility_ratio
 
         # Extract 2D image points for PnP
         image_points = np.array(
@@ -153,7 +186,8 @@ class HeadTracker:
 
         if not success:
             self._face_lost_time = time.perf_counter()
-            return Pose(confidence=0.0, timestamp=timestamp)
+            self._raw_confidence = 0.0
+            return self._build_pose(0.0, timestamp)
 
         # Convert rotation vector to Euler angles
         rot_matrix, _ = cv2.Rodrigues(rvec)
@@ -162,19 +196,54 @@ class HeadTracker:
         # Translation in mm
         tx, ty, tz = tvec.flatten()
 
-        pose = Pose(
+        raw_pose = Pose(
             yaw=pose_angles["yaw"],
             pitch=pose_angles["pitch"],
             roll=pose_angles["roll"],
             x=tx,
             y=ty,
             z=tz,
-            confidence=1.0,
+            confidence=visibility_ratio,
             timestamp=timestamp,
         )
 
-        self._last_valid_pose = pose
-        return pose
+        self._last_valid_pose = raw_pose
+
+        # Blend with last valid pose based on confidence
+        # Low confidence = more of last_valid_pose, high = more of current
+        conf = self._confidence_smoother(visibility_ratio, timestamp)
+        return self._build_pose(conf, timestamp, raw_pose)
+
+    def _build_pose(
+        self,
+        confidence: float,
+        timestamp: float,
+        raw_pose: Pose | None = None,
+    ) -> Pose:
+        """Build final pose by blending raw_pose with last_valid_pose based on confidence.
+        confidence is already smoothed by the caller."""
+        if raw_pose is not None and confidence > 0.01:
+            # Blend: low confidence → keep more of last_valid, high → trust current
+            t = confidence
+            pose = Pose(
+                yaw=self._last_valid_pose.yaw * (1 - t) + raw_pose.yaw * t,
+                pitch=self._last_valid_pose.pitch * (1 - t) + raw_pose.pitch * t,
+                roll=self._last_valid_pose.roll * (1 - t) + raw_pose.roll * t,
+                x=self._last_valid_pose.x * (1 - t) + raw_pose.x * t,
+                y=self._last_valid_pose.y * (1 - t) + raw_pose.y * t,
+                z=self._last_valid_pose.z * (1 - t) + raw_pose.z * t,
+                confidence=confidence,
+                timestamp=timestamp,
+            )
+            self._blend_pose = pose
+            return pose
+        else:
+            # No detection or very low confidence — hold last pose, fade out
+            pose = self._last_valid_pose.copy()
+            pose.confidence = confidence
+            pose.timestamp = timestamp
+            self._blend_pose = pose
+            return pose
 
     @staticmethod
     def _rotation_matrix_to_euler(R: np.ndarray) -> dict:

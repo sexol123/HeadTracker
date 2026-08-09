@@ -14,6 +14,9 @@ Head tracking software for racing and flight simulators. Uses a regular USB webc
 - **Profile system** — Create, save, duplicate, export/import profiles; Default profile is immutable
 - **Stream stats** — FPS, frame time, bandwidth, resolution, dropped frames for IP cameras
 - **Error handling** — Graceful recovery with user-facing error dialogs
+- **Occlusion handling** — Smooth pose blending when face is partially covered, prevents in-game jitter
+- **Low light enhancement** — CLAHE adaptive histogram equalization for better tracking in dim environments
+- **High DPI support** — Proper scaling on 4K, 2K, and fractional DPI monitors (125%, 150%, 200%)
 
 ## Quick Start
 
@@ -39,18 +42,18 @@ python -m pip install mediapipe opencv-python PySide6 numpy pynput
 
 ### Run
 
-Double-click `start.bat` or run:
-
 ```bash
-python main.py              # Normal mode (no file logging)
-python main.py -debug       # Debug mode (file + console logging)
-python main.py -logging     # Same as -debug
+start.bat              # Normal mode (no file logging)
+start.bat -debug       # Debug mode (file + console logging)
+start_debug.bat        # Shortcut for debug mode
 ```
 
-Arguments are also forwarded from `start.bat`:
+Or directly:
 
 ```bash
-start.bat -debug
+python main.py              # Normal mode
+python main.py -debug       # Debug mode (file + console logging)
+python main.py -logging     # Same as -debug
 ```
 
 ## Usage
@@ -85,6 +88,13 @@ For RTSP cameras:
 3. Press Start
 4. Stream Stats panel shows FPS, frame time, bandwidth, resolution, dropped frames
 
+### Low Light
+
+For dim environments, enable CLAHE image enhancement:
+
+1. Camera tab → check `Enhance low light (CLAHE)`
+2. Adaptive histogram equalization improves face detection in poor lighting
+
 ## Supported Games
 
 Any game that supports FreeTrack or TrackIR protocol:
@@ -107,6 +117,7 @@ HeadTracker/
 ├── main.py                # Entry point, logging setup
 ├── setup.bat               # First-run setup (Python check, deps, model)
 ├── start.bat               # Launch script (forwards args)
+├── start_debug.bat         # Launch with debug logging
 ├── camera.py              # Webcam + IP camera capture, frame stats
 ├── tracker.py             # MediaPipe FaceLandmarker + PnP head pose
 ├── filter.py              # One Euro Filter, Exponential, Passthrough

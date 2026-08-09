@@ -26,9 +26,11 @@ class CenterDialog(QDialog):
         self.preview = QLabel()
         self.preview.setAlignment(Qt.AlignCenter)
         self.preview.setMinimumSize(400, 300)
+        self.preview.setAttribute(Qt.WA_TransparentForMouseEvents)
 
         # Center overlay
         center_widget = QWidget()
+        center_widget.setStyleSheet("background: transparent;")
         center_layout = QVBoxLayout(center_widget)
         center_layout.setAlignment(Qt.AlignCenter)
 
@@ -126,7 +128,9 @@ class CenterDialog(QDialog):
     def _on_button_clicked(self):
         if self._current_pose.confidence <= 0:
             self.lbl_status.setText("No face detected! Look at the camera.")
+            log.info("Center button pressed but no face detected")
             return
+        log.info(f"Center button pressed, confidence={self._current_pose.confidence:.2f}")
         self._on_centered(self._current_pose)
         self.accept()
 

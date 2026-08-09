@@ -16,6 +16,10 @@ class AxisConfig:
     deadzone: float = 2.0
     inverted: bool = False
 
+    def __post_init__(self):
+        self.sensitivity = max(0.1, min(20.0, self.sensitivity))
+        self.deadzone = max(0.0, min(30.0, self.deadzone))
+
 
 @dataclass
 class Profile:
@@ -26,11 +30,16 @@ class Profile:
     camera_fps: int = 30
     mirror: bool = True
     camera_url: str = ""
+    image_enhance: bool = False
     axes: dict[str, AxisConfig] = field(default_factory=dict)
     output_protocol: str = "freetrack"
     hotkeys: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self):
+        self.camera_width = max(160, min(1920, self.camera_width))
+        self.camera_height = max(120, min(1080, self.camera_height))
+        self.camera_fps = max(15, min(120, self.camera_fps))
+        self.camera_index = max(0, self.camera_index)
         if not self.axes:
             self.axes = self.default_axes()
         if not self.hotkeys:
@@ -63,6 +72,7 @@ class Profile:
             camera_fps=data.get("camera_fps", 30),
             mirror=data.get("mirror", True),
             camera_url=data.get("camera_url", ""),
+            image_enhance=data.get("image_enhance", False),
             axes=axes,
             output_protocol=data.get("output_protocol", "freetrack"),
             hotkeys=data.get("hotkeys", {"center": "F12", "reset": "F11"}),
