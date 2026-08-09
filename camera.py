@@ -82,6 +82,10 @@ class Camera:
 
         if url:
             log.info(f"Opening IP camera: {url}")
+            if url.startswith("https://"):
+                import os
+                os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "ssl_verify;0"
+                log.info("HTTPS detected — SSL verification disabled")
             self._cap = cv2.VideoCapture(url)
             if not self._cap.isOpened():
                 log.error(f"Failed to open IP camera: {url}")
