@@ -39,10 +39,6 @@ class Profile:
     hotkeys: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self):
-        self.camera_width = max(160, min(1920, self.camera_width))
-        self.camera_height = max(120, min(1080, self.camera_height))
-        self.camera_fps = max(15, min(120, self.camera_fps))
-        self.camera_index = max(0, self.camera_index)
         if not self.axes:
             self.axes = self.default_axes()
         if not self.hotkeys:

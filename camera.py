@@ -271,6 +271,10 @@ class WebSocketCamera:
             log.info("WebSocket connected")
 
         try:
+            ssl_opts = {}
+            if self._url.startswith("wss://"):
+                ssl_opts = {"cert_reqs": 0}
+                log.info("WSS detected — SSL verification disabled")
             ws = websocket.WebSocketApp(
                 self._url,
                 on_message=on_message,
@@ -279,7 +283,10 @@ class WebSocketCamera:
                 on_open=on_open,
             )
             self._ws = ws
-            ws.run_forever(sslopt={"cert_reqs": 0})
+            if ssl_opts:
+                ws.run_forever(sslopt=ssl_opts)
+            else:
+                ws.run_forever()
         except Exception as e:
             log.error(f"WebSocket connection failed: {e}")
             self._running = False
