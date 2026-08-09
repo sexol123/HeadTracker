@@ -20,25 +20,11 @@ class AxisConfig:
 @dataclass
 class Profile:
     name: str = "Default"
-    camera_index: int = 0
-    camera_width: int = 640
-    camera_height: int = 480
-    camera_fps: int = 30
-    mirror: bool = True
-    camera_url: str = ""
-    camera_source: str = "local"
-    image_enhance: bool = False
     axes: dict[str, AxisConfig] = field(default_factory=dict)
-    output_protocol: str = "freetrack"
-    udp_host: str = "127.0.0.1"
-    udp_port: int = 4242
-    hotkeys: dict[str, str] = field(default_factory=dict)
 
     def __post_init__(self):
         if not self.axes:
             self.axes = self.default_axes()
-        if not self.hotkeys:
-            self.hotkeys = {"center": "F12", "reset": "F11"}
 
     @staticmethod
     def default_axes() -> dict[str, AxisConfig]:
@@ -61,42 +47,33 @@ class Profile:
             axes[name] = AxisConfig(**axis_data)
         return cls(
             name=data.get("name", "Default"),
-            camera_index=data.get("camera_index", 0),
-            camera_width=data.get("camera_width", 640),
-            camera_height=data.get("camera_height", 480),
-            camera_fps=data.get("camera_fps", 30),
-            mirror=data.get("mirror", True),
-            camera_url=data.get("camera_url", ""),
-            camera_source=data.get("camera_source", "local"),
-            image_enhance=data.get("image_enhance", False),
             axes=axes,
-            output_protocol=data.get("output_protocol", "freetrack"),
-            udp_host=data.get("udp_host", "127.0.0.1"),
-            udp_port=data.get("udp_port", 4242),
-            hotkeys=data.get("hotkeys", {"center": "F12", "reset": "F11"}),
         )
 
 
 @dataclass
 class AppSettings:
     last_profile: str = "Default"
-    auto_start: bool = False
-    show_overlay: bool = True
     language: str = "en"
     first_run: bool = True
+    camera_index: int = 0
+    camera_width: int = 640
+    camera_height: int = 480
+    camera_fps: int = 30
+    mirror: bool = True
+    camera_url: str = ""
+    camera_source: str = "local"
+    image_enhance: bool = False
+    output_protocol: str = "freetrack"
+    udp_host: str = "127.0.0.1"
+    udp_port: int = 4242
 
     def to_dict(self) -> dict:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: dict) -> "AppSettings":
-        return cls(
-            last_profile=data.get("last_profile", "Default"),
-            auto_start=data.get("auto_start", False),
-            show_overlay=data.get("show_overlay", True),
-            language=data.get("language", "en"),
-            first_run=data.get("first_run", True),
-        )
+        return cls(**{k: v for k, v in data.items() if k in cls.__dataclass_fields__})
 
 
 def load_profile(path: str | Path) -> Profile:
@@ -143,7 +120,6 @@ def ensure_default_profile():
 def list_profiles() -> list[Path]:
     ensure_default_profile()
     all_profiles = sorted(PROFILES_DIR.glob("*.json"))
-    # Always put default first
     default = PROFILES_DIR / "default.json"
     others = [p for p in all_profiles if p != default]
     return [default] + others
@@ -171,7 +147,9 @@ def save_settings(settings: AppSettings):
         log.info(f"Settings saved: {SETTINGS_FILE}")
     except PermissionError:
         log.error(f"Permission denied writing settings: {SETTINGS_FILE}")
+        raise
     except OSError as e:
-        log.error(f"OS error writing settings: {e}")
+        log.error(f"OS error writing settings {SETTINGS_FILE}: {e}")
+        raise
     except Exception as e:
-        log.error(f"Failed to save settings: {e}", exc_info=True)
+        log.error(f"Failed to save settings: {e}")

@@ -6,15 +6,15 @@ from camera import Camera, WebSocketCamera, CameraFrame
 from tracker import HeadTracker, Pose
 from freetrack import FreeTrackOutput
 from udp_output import UdpOutput
-from config import Profile
+from config import Profile, AppSettings
 from i18n import t
 
 log = logging.getLogger("worker")
 
 
 class TrackingWorker(QThread):
-    frame_ready = Signal(object)   # CameraFrame
-    pose_ready = Signal(object)    # Pose (mapped, after center subtraction)
+    frame_ready = Signal(object)
+    pose_ready = Signal(object)
     confidence_ready = Signal(float)
     error_occurred = Signal(str)
     stopped = Signal()
@@ -22,36 +22,38 @@ class TrackingWorker(QThread):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._running = False
-        self._camera: Camera | None = None
+        self._camera = None
         self._tracker: HeadTracker | None = None
         self._output = None
         self._profile: Profile | None = None
+        self._settings: AppSettings | None = None
         self._mutex = QMutex()
         self._last_raw_pose = Pose()
         self._last_frame: CameraFrame | None = None
 
-    def start_tracking(self, profile: Profile):
+    def start_tracking(self, profile: Profile, settings: AppSettings):
         with QMutexLocker(self._mutex):
             if self._running:
                 return
             self._profile = profile
+            self._settings = settings
 
         try:
-            if profile.camera_source == "websocket":
+            if settings.camera_source == "websocket":
                 self._camera = WebSocketCamera()
-                if not self._camera.start(url=profile.camera_url):
+                if not self._camera.start(url=settings.camera_url):
                     self.error_occurred.emit(t("error_camera"))
                     return
             else:
                 self._camera = Camera()
                 if not self._camera.start(
-                    index=profile.camera_index,
-                    width=profile.camera_width,
-                    height=profile.camera_height,
-                    fps=profile.camera_fps,
-                    mirror=profile.mirror,
-                    url=profile.camera_url,
-                    enhance=profile.image_enhance,
+                    index=settings.camera_index,
+                    width=settings.camera_width,
+                    height=settings.camera_height,
+                    fps=settings.camera_fps,
+                    mirror=settings.mirror,
+                    url=settings.camera_url,
+                    enhance=settings.image_enhance,
                 ):
                     self.error_occurred.emit(t("error_camera"))
                     return
@@ -61,13 +63,13 @@ class TrackingWorker(QThread):
                 confidence_threshold=0.3,
             )
 
-            if profile.output_protocol == "freetrack":
+            if settings.output_protocol == "freetrack":
                 self._output = FreeTrackOutput()
             else:
-                self._output = UdpOutput(host=profile.udp_host, port=profile.udp_port)
+                self._output = UdpOutput(host=settings.udp_host, port=settings.udp_port)
 
             if not self._output.start():
-                self.error_occurred.emit(t("error_output").format(profile.output_protocol))
+                self.error_occurred.emit(t("error_output").format(settings.output_protocol))
                 self._cleanup()
                 return
 
@@ -104,9 +106,7 @@ class TrackingWorker(QThread):
             )
             self._last_raw_pose = pose
 
-            corrected = pose
-
-            mapped = self._apply_mapping(corrected, profile)
+            mapped = self._apply_mapping(pose, profile)
 
             if self._output and mapped.confidence >= 0.3:
                 self._output.send_pose(
@@ -131,10 +131,6 @@ class TrackingWorker(QThread):
         self.wait(3000)
         self._cleanup()
         log.info("Worker stopped")
-
-    def update_profile(self, profile: Profile):
-        with QMutexLocker(self._mutex):
-            self._profile = profile
 
     def get_raw_pose(self) -> Pose:
         return self._last_raw_pose

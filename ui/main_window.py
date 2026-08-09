@@ -510,7 +510,13 @@ class MainWindow(QMainWindow):
         try:
             self.profile = load_profile(path)
             self._current_profile_path = Path(path)
-            self._apply_profile()
+            for name, widgets in self._axis_widgets.items():
+                if name in self.profile.axes:
+                    ax = self.profile.axes[name]
+                    widgets["enabled"].setChecked(ax.enabled)
+                    widgets["sensitivity"].setValue(ax.sensitivity)
+                    widgets["deadzone"].setValue(ax.deadzone)
+                    widgets["inverted"].setChecked(ax.inverted)
             self.lbl_profile.setText(self.profile.name)
             log.info(f"Profile loaded: {self.profile.name}")
             if self.tracking_active:
@@ -525,26 +531,27 @@ class MainWindow(QMainWindow):
         self.btn_delete.setEnabled(not is_default)
 
     def _apply_profile(self):
-        p = self.profile
-        self.chk_mirror.setChecked(p.mirror)
-        self.chk_enhance.setChecked(p.image_enhance)
-        self.spin_width.setValue(p.camera_width)
-        self.spin_height.setValue(p.camera_height)
-        self.spin_fps.setValue(p.camera_fps)
-        self.edit_url.setText(p.camera_url)
+        s = self.app_settings
+        self.chk_mirror.setChecked(s.mirror)
+        self.chk_enhance.setChecked(s.image_enhance)
+        self.spin_width.setValue(s.camera_width)
+        self.spin_height.setValue(s.camera_height)
+        self.spin_fps.setValue(s.camera_fps)
+        self.edit_url.setText(s.camera_url)
 
-        # Camera type
-        if p.camera_source == "websocket":
+        if s.camera_source == "websocket":
             self.combo_cam_type.setCurrentIndex(2)
-        elif p.camera_url:
+        elif s.camera_url:
             self.combo_cam_type.setCurrentIndex(1)
         else:
             self.combo_cam_type.setCurrentIndex(0)
         self._on_cam_type_changed(self.combo_cam_type.currentIndex())
 
         for i in range(self.combo_camera.count()):
-            if self.combo_camera.itemData(i) == p.camera_index:
+            if self.combo_camera.itemData(i) == s.camera_index:
                 self.combo_camera.setCurrentIndex(i); break
+
+        p = self.profile
         for name, widgets in self._axis_widgets.items():
             if name in p.axes:
                 ax = p.axes[name]
@@ -554,14 +561,13 @@ class MainWindow(QMainWindow):
                 widgets["inverted"].setChecked(ax.inverted)
         self.lbl_profile.setText(p.name)
 
-        # Output protocol
         if IS_WINDOWS:
-            self.combo_protocol.setCurrentIndex(0 if p.output_protocol == "freetrack" else 1)
+            self.combo_protocol.setCurrentIndex(0 if s.output_protocol == "freetrack" else 1)
         else:
             self.combo_protocol.setCurrentIndex(0)
         self._on_protocol_changed(self.combo_protocol.currentIndex())
-        self.edit_udp_host.setText(p.udp_host)
-        self.spin_udp_port.setValue(p.udp_port)
+        self.edit_udp_host.setText(s.udp_host)
+        self.spin_udp_port.setValue(s.udp_port)
 
     def _on_cam_type_changed(self, index):
         is_ip = index == 1
@@ -583,29 +589,7 @@ class MainWindow(QMainWindow):
         self._udp_widget.setVisible(not IS_WINDOWS or index == 1)
 
     def _read_profile_from_ui(self) -> Profile:
-        cam_type = self.combo_cam_type.currentIndex()
-        camera_source = ["local", "ip", "websocket"][cam_type]
-        is_ip_or_ws = cam_type in (1, 2)
-        # Determine protocol
-        if IS_WINDOWS:
-            protocol = "freetrack" if self.combo_protocol.currentIndex() == 0 else "udp"
-        else:
-            protocol = "udp"
-        p = Profile(
-            name=self.profile.name,
-            camera_index=self.combo_camera.currentData() or 0,
-            camera_width=self.spin_width.value(),
-            camera_height=self.spin_height.value(),
-            camera_fps=self.spin_fps.value(),
-            mirror=self.chk_mirror.isChecked(),
-            camera_url=self.edit_url.text().strip() if is_ip_or_ws else "",
-            camera_source=camera_source,
-            image_enhance=self.chk_enhance.isChecked(),
-            output_protocol=protocol,
-            udp_host=self.edit_udp_host.text().strip() or "127.0.0.1",
-            udp_port=self.spin_udp_port.value(),
-            hotkeys=self.profile.hotkeys.copy(),
-        )
+        p = Profile(name=self.profile.name)
         for name, widgets in self._axis_widgets.items():
             p.axes[name] = AxisConfig(
                 enabled=widgets["enabled"].isChecked(),
@@ -614,6 +598,24 @@ class MainWindow(QMainWindow):
                 inverted=widgets["inverted"].isChecked(),
             )
         return p
+
+    def _read_settings_from_ui(self):
+        s = self.app_settings
+        cam_type = self.combo_cam_type.currentIndex()
+        s.camera_source = ["local", "ip", "websocket"][cam_type]
+        s.camera_url = self.edit_url.text().strip() if cam_type in (1, 2) else ""
+        s.camera_index = self.combo_camera.currentData() or 0
+        s.camera_width = self.spin_width.value()
+        s.camera_height = self.spin_height.value()
+        s.camera_fps = self.spin_fps.value()
+        s.mirror = self.chk_mirror.isChecked()
+        s.image_enhance = self.chk_enhance.isChecked()
+        if IS_WINDOWS:
+            s.output_protocol = "freetrack" if self.combo_protocol.currentIndex() == 0 else "udp"
+        else:
+            s.output_protocol = "udp"
+        s.udp_host = self.edit_udp_host.text().strip() or "127.0.0.1"
+        s.udp_port = self.spin_udp_port.value()
 
     def _on_profile_new(self):
         self.btn_new.setEnabled(False)
@@ -774,6 +776,7 @@ class MainWindow(QMainWindow):
 
     def _start_tracking(self):
         self.profile = self._read_profile_from_ui()
+        self._read_settings_from_ui()
         log.info(f"Starting tracking: {self.profile.name}")
         self.btn_start.setText("⏳")
         self.btn_start.setStyleSheet("QPushButton { background-color: #f39c12; color: white; font-weight: bold; font-size: 16px; } QPushButton:hover { background-color: #e67e22; }")
@@ -783,7 +786,7 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(800, self._do_start_tracking)
 
     def _do_start_tracking(self):
-        self.worker.start_tracking(self.profile)
+        self.worker.start_tracking(self.profile, self.app_settings)
         self.tracking_active = True
         self.btn_start.setText(t("btn_stop"))
         self.btn_start.setStyleSheet("QPushButton { background-color: #e74c3c; color: white; font-weight: bold; } QPushButton:hover { background-color: #c0392b; }")
