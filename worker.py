@@ -7,6 +7,7 @@ from tracker import HeadTracker, Pose
 from freetrack import FreeTrackOutput
 from udp_output import UdpOutput
 from config import Profile
+from i18n import t
 
 log = logging.getLogger("worker")
 
@@ -25,7 +26,6 @@ class TrackingWorker(QThread):
         self._tracker: HeadTracker | None = None
         self._output = None
         self._profile: Profile | None = None
-        self._center_pose = Pose()
         self._mutex = QMutex()
         self._last_raw_pose = Pose()
         self._last_frame: CameraFrame | None = None
@@ -47,7 +47,7 @@ class TrackingWorker(QThread):
                 url=profile.camera_url,
                 enhance=profile.image_enhance,
             ):
-                self.error_occurred.emit("Failed to open camera")
+                self.error_occurred.emit(t("error_camera"))
                 return
 
             self._tracker = HeadTracker(
@@ -61,7 +61,7 @@ class TrackingWorker(QThread):
                 self._output = UdpOutput(host=profile.udp_host, port=profile.udp_port)
 
             if not self._output.start():
-                self.error_occurred.emit(f"Failed to start {profile.output_protocol} output")
+                self.error_occurred.emit(t("error_output").format(profile.output_protocol))
                 self._cleanup()
                 return
 
@@ -73,6 +73,10 @@ class TrackingWorker(QThread):
             log.error(f"Failed to start worker: {e}", exc_info=True)
             self.error_occurred.emit(str(e))
             self._cleanup()
+
+    def update_profile(self, profile: Profile):
+        with QMutexLocker(self._mutex):
+            self._profile = profile
 
     def run(self):
         log.info("Worker thread running")
@@ -87,7 +91,6 @@ class TrackingWorker(QThread):
             self._last_frame = frame
 
             with QMutexLocker(self._mutex):
-                center = self._center_pose
                 profile = self._profile
 
             pose = self._tracker.process_frame(
@@ -95,16 +98,7 @@ class TrackingWorker(QThread):
             )
             self._last_raw_pose = pose
 
-            corrected = Pose(
-                yaw=pose.yaw - center.yaw,
-                pitch=pose.pitch - center.pitch,
-                roll=pose.roll - center.roll,
-                x=pose.x - center.x,
-                y=pose.y - center.y,
-                z=pose.z - center.z,
-                confidence=pose.confidence,
-                timestamp=pose.timestamp,
-            )
+            corrected = pose
 
             mapped = self._apply_mapping(corrected, profile)
 
@@ -131,10 +125,6 @@ class TrackingWorker(QThread):
         self.wait(3000)
         self._cleanup()
         log.info("Worker stopped")
-
-    def set_center_pose(self, pose: Pose):
-        with QMutexLocker(self._mutex):
-            self._center_pose = pose
 
     def update_profile(self, profile: Profile):
         with QMutexLocker(self._mutex):

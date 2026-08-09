@@ -1,6 +1,6 @@
 # HeadTracker
 
-Head tracking software for racing and flight simulators. Uses a regular USB webcam to track your head movement and sends it to games via FreeTrack 2.0 protocol.
+Head tracking software for racing and flight simulators. Uses a regular USB webcam to track your head movement and sends it to games via FreeTrack 2.0 or UDP protocol.
 
 ## Features
 
@@ -9,23 +9,24 @@ Head tracking software for racing and flight simulators. Uses a regular USB webc
 - **FreeTrack 2.0 output** — Windows shared memory (Assetto Corsa, BeamNG, ETS2, DCS, 800+ games)
 - **UDP output** — Cross-platform network output (Linux, SteamOS, macOS)
 - **Live overlay** — Face mesh, landmarks, and pose axes on camera preview
-- **Fullscreen centering** — Dedicated dialog with crosshair, face status, and one-click centering
 - **Per-axis settings** — Sensitivity, deadzone, inversion for each axis
 - **Game presets** — Pre-configured profiles for popular simulators
-- **Profile system** — Create, save, duplicate, export/import profiles; Default is immutable
+- **Profile system** — Create, delete profiles; profiles apply instantly on selection
 - **Stream stats** — FPS, frame time, bandwidth, resolution, dropped frames for IP cameras
 - **Error handling** — Graceful recovery with user-facing error dialogs
 - **Occlusion handling** — Smooth pose blending when face is partially covered
 - **Low light enhancement** — CLAHE adaptive histogram equalization
 - **High DPI support** — Proper scaling on 4K, 2K, and fractional DPI monitors (125%, 150%, 200%)
 - **Threaded inference** — MediaPipe runs in background thread, UI stays responsive
-- **Multi-platform** — Windows, Linux, SteamOS
+- **Button debounce** — Protection against rapid double-clicks on all buttons
+- **Localization** — English, Russian, Ukrainian, German (language selector in About tab)
+- **Multi-platform** — Windows, Linux, macOS, SteamOS
 
 ## Quick Start
 
 ### Requirements
 
-- Windows 10/11, Linux, or SteamOS
+- Windows 10/11, Linux, macOS, or SteamOS
 - Python 3.9+ (3.11+ recommended)
 - USB webcam or IP camera
 
@@ -58,7 +59,14 @@ python3 -m pip install mediapipe opencv-python PySide6 numpy pynput
 
 ### Run
 
-**Windows:**
+**Windows (no terminal):**
+
+```bash
+HeadTracker.pyw          # Double-click — no console window
+HeadTracker.bat          # Alternative launcher
+```
+
+**Windows (with terminal):**
 
 ```bash
 start.bat              # Normal mode (no file logging)
@@ -66,11 +74,18 @@ start.bat -debug       # Debug mode (file + console logging)
 start_debug.bat        # Shortcut for debug mode
 ```
 
-**Linux / SteamOS:**
+**Linux / SteamOS (no terminal):**
 
 ```bash
-./start.sh             # Normal mode
-./start_debug.sh       # Debug mode
+chmod +x HeadTracker.sh
+./HeadTracker.sh       # Runs in background, no terminal needed
+```
+
+**macOS (no terminal):**
+
+```bash
+chmod +x HeadTracker.command
+./HeadTracker.command  # Double-click in Finder — launches without console
 ```
 
 **Any platform (direct):**
@@ -84,25 +99,43 @@ python main.py -logging     # Same as -debug
 ## Usage
 
 1. **Select camera** — Camera tab, pick your webcam or enter IP camera URL
-2. **Press Start** — Tracking begins, face mesh overlay appears
-3. **Press Center (F12)** — Opens fullscreen centering dialog
-4. **Launch your game** — FreeTrack data is sent automatically
-5. **Press Reset (F11)** — Returns virtual camera to center
+2. **Press Start** — Button turns yellow (⏳) then red (Stop), tracking begins
+3. **Select profile** — Axes tab, pick a game preset from the dropdown
+4. **Launch your game** — FreeTrack/UDP data is sent automatically
+5. **Press Stop** — Button turns green (Start), tracking stops, all values reset to zero
 
-### Centering Dialog
+### UI Layout
 
-When you press Center (F12), a fullscreen dialog opens with:
-- Live camera preview with crosshair
-- Face detection status (green = OK, red = no face)
-- Large CENTER button — press to set current pose as center
-- ESC to cancel without changing center
+```
+┌──────────────────────────┬──────────────────────────┐
+│  Camera Preview          │  Tabs                    │
+│                          │  ┌────────────────────┐  │
+│  [Start] [Stop]          │  │ Camera / Axes /    │  │
+│                          │  │ Output / Log /     │  │
+│  ┌───────┬─────────┐     │  │ About              │  │
+│  │ Pose  │  Info   │     │  └────────────────────┘  │
+│  │ Y/P/R │ Conf    │     │                          │
+│  │ X/Y/Z │ FPS     │     │                          │
+│  └───────┴─────────┘     │                          │
+└──────────────────────────┴──────────────────────────┘
+```
 
-### Hotkeys
+### Axes Tab
 
-| Key | Action |
-|-----|--------|
-| F12 | Center (open centering dialog) |
-| F11 | Reset (return to center) |
+The Axes tab contains:
+- **Profile selector** at the top — pick a profile or create a new one
+- **Per-axis settings** — Enabled, Sensitivity, Deadzone, Inverted for each of 6 axes (Yaw, Pitch, Roll, X, Y, Z)
+
+### Buttons
+
+| Button | State | Action |
+|--------|-------|--------|
+| Start | 🟢 Green | Begin tracking → turns yellow (⏳) → red (Stop) |
+| Stop | 🔴 Red | End tracking → turns green (Start) |
+| New | — | Create a new profile by duplicating the current one |
+| Delete | — | Delete the selected profile (Default cannot be deleted) |
+
+All buttons have 800ms debounce protection against rapid clicks.
 
 ### IP Camera
 
@@ -127,10 +160,19 @@ For dim environments, enable CLAHE image enhancement:
 | FreeTrack | Windows | 800+ sim racing/flight games via shared memory |
 | UDP | All | Cross-platform network output, games that support UDP trackers |
 
-### Linux / SteamOS Notes
+### Exit Confirmation
 
-- FreeTrack shared memory is Windows-only — use **UDP output** on Linux
-- Camera uses V4L2 backend (default on Linux)
+When tracking is active, closing the window shows a warning dialog: "Отслеживание активно. Вы уверены, что хотите выйти?" — prevents accidental exit.
+
+### Localization
+
+Language selector in the About tab. Changes apply instantly without restart:
+- English, Русский, Українська, Deutsch
+
+### Linux / macOS / SteamOS Notes
+
+- FreeTrack shared memory is Windows-only — use **UDP output** on Linux/macOS
+- Camera uses V4L2 backend (Linux) or AVFoundation (macOS)
 - Face detection model downloaded by `setup.sh`
 - SteamOS: run in desktop mode for camera access
 
@@ -174,7 +216,6 @@ Use UDP output in games that support UDP head tracking (e.g., through opentrack 
 │                                                     │
 │  Camera.get_frame()        ← blocking read          │
 │  HeadTracker.process_frame() ← ML inference (10-50ms)│
-│  center subtraction                                  │
 │  axis mapping (sensitivity, deadzone, inversion)     │
 │  output.send_pose() (FreeTrack / UDP)               │
 │                                                     │
@@ -188,9 +229,14 @@ MediaPipe inference (the most expensive operation) runs in a background thread, 
 
 ```
 HeadTracker/
-├── main.py                # Entry point, logging setup
+├── main.py                # Entry point, logging, splash screen
+├── HeadTracker.pyw        # Windows: no-console launcher
+├── HeadTracker.bat        # Windows: no-console launcher (alt)
+├── HeadTracker.sh         # Linux/macOS: no-terminal launcher
+├── HeadTracker.command    # macOS: native double-click launcher
 ├── setup.bat / setup.sh   # First-run setup (Python check, deps, model)
-├── start.bat / start.sh   # Launch scripts
+├── start.bat / start.sh   # Launch scripts (with terminal)
+├── i18n.py                # Localization (en, ru, uk, de)
 ├── camera.py              # Webcam + IP camera capture, frame stats
 ├── tracker.py             # MediaPipe FaceLandmarker + PnP head pose
 ├── filter.py              # One Euro Filter, Exponential, Passthrough
@@ -199,8 +245,7 @@ HeadTracker/
 ├── udp_output.py          # UDP output (cross-platform)
 ├── config.py              # Profile, AxisConfig, AppSettings, JSON I/O
 ├── ui/
-│   ├── main_window.py     # PySide6 GUI, overlay, profile management
-│   └── center_dialog.py   # Fullscreen centering dialog
+│   └── main_window.py     # PySide6 GUI, overlay, profile management
 ├── models/                # MediaPipe face_landmarker.task
 ├── profiles/              # Game preset profiles (JSON)
 ├── settings.json          # App settings (auto-saved, gitignored)
@@ -218,7 +263,6 @@ HeadTracker/
 | Head pose | OpenCV solvePnP | Apache 2.0 |
 | GUI | PySide6 | LGPL v3 |
 | Camera | OpenCV | Apache 2.0 |
-| Hotkeys | pynput | LGPL v3 |
 
 ## License
 

@@ -9,13 +9,14 @@ from PySide6.QtWidgets import (
     QTabWidget, QTextEdit, QLineEdit, QMessageBox,
     QFileDialog, QScrollArea,
 )
-from PySide6.QtCore import Qt, Slot
+from PySide6.QtCore import Qt, Slot, QTimer
 from PySide6.QtGui import QImage, QPixmap, QFont
 
 from worker import TrackingWorker
 from camera import Camera
 from tracker import Pose
 from freetrack import IS_WINDOWS
+from i18n import t, set_language, get_language, available_languages
 from config import (
     Profile, AxisConfig, AppSettings,
     load_profile, save_profile,
@@ -23,7 +24,6 @@ from config import (
     list_profiles, PROFILES_DIR,
 )
 from pathlib import Path
-from ui.center_dialog import CenterDialog
 
 log = logging.getLogger("ui")
 
@@ -53,6 +53,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self.profile = profile
         self.app_settings = load_settings()
+        self._pulse_splash()
         self.worker = TrackingWorker()
         self.worker.frame_ready.connect(self._on_worker_frame)
         self.worker.pose_ready.connect(self._on_worker_pose)
@@ -60,7 +61,6 @@ class MainWindow(QMainWindow):
         self.worker.error_occurred.connect(self._on_worker_error)
         self.worker.stopped.connect(self._on_worker_stopped)
         self.tracking_active = False
-        self.center_pose = Pose()
         self.current_pose = Pose()
         self.raw_pose = Pose()
         self.frame_count = 0
@@ -71,11 +71,35 @@ class MainWindow(QMainWindow):
         self._was_minimized = False
 
         self._init_ui()
+        self._pulse_splash()
         self._populate_profiles()
+        self._pulse_splash()
         self._apply_profile()
+        self._pulse_splash()
+
+        if self.app_settings.first_run:
+            self.tabs.setCurrentIndex(4)
+            self.app_settings.first_run = False
+
+    @staticmethod
+    def _pulse_splash():
+        from PySide6.QtWidgets import QApplication
+        QApplication.processEvents()
+
+    def _debounce(self, button, delay=800):
+        self._btn_locked = True
+        button.setEnabled(False)
+        QTimer.singleShot(delay, self._debounce_end)
+
+    def _debounce_end(self):
+        self._btn_locked = False
+        if self.tracking_active:
+            self.btn_start.setEnabled(True)
+        else:
+            self.btn_start.setEnabled(True)
 
     def _init_ui(self):
-        self.setWindowTitle("HeadTracker v0.1")
+        self.setWindowTitle(t("window_title"))
         self.setMinimumSize(960, 640)
         central = QWidget()
         self.setCentralWidget(central)
@@ -87,211 +111,234 @@ class MainWindow(QMainWindow):
         left_panel = QWidget()
         left_layout = QVBoxLayout(left_panel)
         left_layout.setContentsMargins(4, 4, 4, 4)
-        self.preview_label = QLabel("Camera preview")
+        self.preview_label = QLabel(t("camera_preview"))
         self.preview_label.setAlignment(Qt.AlignCenter)
         self.preview_label.setMinimumSize(480, 360)
         self.preview_label.setStyleSheet("background-color: #1a1a2e; color: #888;")
         left_layout.addWidget(self.preview_label)
 
         controls_layout = QHBoxLayout()
-        self.btn_start = QPushButton("Start")
+        self.btn_start = QPushButton(t("btn_start"))
         self.btn_start.setFixedHeight(36)
+        self.btn_start.setStyleSheet("QPushButton { background-color: #2ecc71; color: white; font-weight: bold; } QPushButton:hover { background-color: #27ae60; }")
         self.btn_start.clicked.connect(self._on_start_stop)
         controls_layout.addWidget(self.btn_start)
-        self.btn_center = QPushButton("Center (F12)")
-        self.btn_center.setFixedHeight(36)
-        self.btn_center.clicked.connect(self._on_center)
-        controls_layout.addWidget(self.btn_center)
-        self.btn_reset = QPushButton("Reset (F11)")
-        self.btn_reset.setFixedHeight(36)
-        self.btn_reset.clicked.connect(self._on_reset)
-        controls_layout.addWidget(self.btn_reset)
         left_layout.addLayout(controls_layout)
+
+        self._pose_group = QGroupBox(t("head_pose"))
+        self._pose_form = QFormLayout()
+        self.lbl_yaw = QLabel("0.00"); self.lbl_yaw.setFont(QFont("Consolas", 14))
+        self._lbl_yaw_title = QLabel(t("yaw"))
+        self._pose_form.addRow(self._lbl_yaw_title, self.lbl_yaw)
+        self.lbl_pitch = QLabel("0.00"); self.lbl_pitch.setFont(QFont("Consolas", 14))
+        self._lbl_pitch_title = QLabel(t("pitch"))
+        self._pose_form.addRow(self._lbl_pitch_title, self.lbl_pitch)
+        self.lbl_roll = QLabel("0.00"); self.lbl_roll.setFont(QFont("Consolas", 14))
+        self._lbl_roll_title = QLabel(t("roll"))
+        self._pose_form.addRow(self._lbl_roll_title, self.lbl_roll)
+        self.lbl_x = QLabel("0.00"); self.lbl_x.setFont(QFont("Consolas", 14))
+        self._lbl_x_title = QLabel(t("x_axis"))
+        self._pose_form.addRow(self._lbl_x_title, self.lbl_x)
+        self.lbl_y = QLabel("0.00"); self.lbl_y.setFont(QFont("Consolas", 14))
+        self._lbl_y_title = QLabel(t("y_axis"))
+        self._pose_form.addRow(self._lbl_y_title, self.lbl_y)
+        self.lbl_z = QLabel("0.00"); self.lbl_z.setFont(QFont("Consolas", 14))
+        self._lbl_z_title = QLabel(t("z_axis"))
+        self._pose_form.addRow(self._lbl_z_title, self.lbl_z)
+        self._pose_group.setLayout(self._pose_form)
+
+        self._info_group = QGroupBox(t("info"))
+        self._info_form = QFormLayout()
+        self.lbl_confidence = QLabel("0.0")
+        self._lbl_conf_title = QLabel(t("confidence"))
+        self._info_form.addRow(self._lbl_conf_title, self.lbl_confidence)
+        self.lbl_fps = QLabel("0")
+        self._lbl_fps_title = QLabel(t("fps"))
+        self._info_form.addRow(self._lbl_fps_title, self.lbl_fps)
+        self.lbl_profile = QLabel(self.profile.name)
+        self._lbl_profile_title = QLabel(t("profile_name"))
+        self._info_form.addRow(self._lbl_profile_title, self.lbl_profile)
+        self.lbl_status = QLabel(t("status_stopped"))
+        self._lbl_status_title = QLabel(t("tab_status") + ":")
+        self._info_form.addRow(self._lbl_status_title, self.lbl_status)
+        self._info_group.setLayout(self._info_form)
+
+        status_layout = QHBoxLayout()
+        status_layout.addWidget(self._pose_group)
+        status_layout.addWidget(self._info_group)
+        left_layout.addLayout(status_layout)
+
+        left_panel.setMinimumWidth(400)
         splitter.addWidget(left_panel)
 
         # Right: tabs
         right_panel = QWidget()
+        right_panel.setMinimumWidth(420)
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(4, 4, 4, 4)
         self.tabs = QTabWidget()
         right_layout.addWidget(self.tabs)
-        self._build_profile_tab()
-        self._build_status_tab()
         self._build_camera_tab()
         self._build_axes_tab()
         self._build_output_tab()
         self._build_log_tab()
+        self._build_about_tab()
         splitter.addWidget(right_panel)
         splitter.setSizes([520, 440])
 
     def _build_profile_tab(self):
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        sel_layout = QHBoxLayout()
-        self.combo_profile = QComboBox()
-        self.combo_profile.currentIndexChanged.connect(self._on_profile_changed)
-        sel_layout.addWidget(self.combo_profile, 1)
-        self.btn_save = QPushButton("Save")
-        self.btn_save.setFixedWidth(80)
-        self.btn_save.clicked.connect(self._on_save)
-        sel_layout.addWidget(self.btn_save)
-        layout.addLayout(sel_layout)
-
-        act_layout = QHBoxLayout()
-        self.btn_new = QPushButton("New")
-        self.btn_new.clicked.connect(self._on_profile_new)
-        act_layout.addWidget(self.btn_new)
-        btn_delete = QPushButton("Delete")
-        btn_delete.clicked.connect(self._on_profile_delete)
-        act_layout.addWidget(btn_delete)
-        self.btn_delete = btn_delete
-        self.btn_duplicate = QPushButton("Duplicate")
-        self.btn_duplicate.clicked.connect(self._on_profile_duplicate)
-        act_layout.addWidget(self.btn_duplicate)
-        self.btn_export = QPushButton("Export")
-        self.btn_export.clicked.connect(self._on_profile_export)
-        act_layout.addWidget(self.btn_export)
-        self.btn_import = QPushButton("Import")
-        self.btn_import.clicked.connect(self._on_profile_import)
-        act_layout.addWidget(self.btn_import)
-        layout.addLayout(act_layout)
-        layout.addStretch()
-        self.tabs.addTab(tab, "Profile")
-
-    def _build_status_tab(self):
-        tab = QWidget()
-        layout = QVBoxLayout(tab)
-        pose_group = QGroupBox("Head Pose")
-        pose_form = QFormLayout()
-        self.lbl_yaw = QLabel("0.00"); self.lbl_yaw.setFont(QFont("Consolas", 14))
-        pose_form.addRow("Yaw:", self.lbl_yaw)
-        self.lbl_pitch = QLabel("0.00"); self.lbl_pitch.setFont(QFont("Consolas", 14))
-        pose_form.addRow("Pitch:", self.lbl_pitch)
-        self.lbl_roll = QLabel("0.00"); self.lbl_roll.setFont(QFont("Consolas", 14))
-        pose_form.addRow("Roll:", self.lbl_roll)
-        self.lbl_x = QLabel("0.00"); self.lbl_x.setFont(QFont("Consolas", 14))
-        pose_form.addRow("X:", self.lbl_x)
-        self.lbl_y = QLabel("0.00"); self.lbl_y.setFont(QFont("Consolas", 14))
-        pose_form.addRow("Y:", self.lbl_y)
-        self.lbl_z = QLabel("0.00"); self.lbl_z.setFont(QFont("Consolas", 14))
-        pose_form.addRow("Z:", self.lbl_z)
-        pose_group.setLayout(pose_form)
-        layout.addWidget(pose_group)
-
-        info_group = QGroupBox("Info")
-        info_form = QFormLayout()
-        self.lbl_confidence = QLabel("0.0")
-        info_form.addRow("Confidence:", self.lbl_confidence)
-        self.lbl_fps = QLabel("0")
-        info_form.addRow("FPS:", self.lbl_fps)
-        self.lbl_profile = QLabel(self.profile.name)
-        info_form.addRow("Profile:", self.lbl_profile)
-        self.lbl_status = QLabel("Stopped")
-        info_form.addRow("Status:", self.lbl_status)
-        info_group.setLayout(info_form)
-        layout.addWidget(info_group)
-        layout.addStretch()
-        self.tabs.addTab(tab, "Status")
+        pass
 
     def _build_camera_tab(self):
         tab = QWidget()
         layout = QVBoxLayout(tab)
         self._cam_form = form = QFormLayout()
         self.combo_cam_type = QComboBox()
-        self.combo_cam_type.addItems(["Local Webcam", "IP Camera (RTSP/HTTP)"])
+        self.combo_cam_type.addItems([t("local_webcam"), t("ip_camera")])
         self.combo_cam_type.currentIndexChanged.connect(self._on_cam_type_changed)
-        form.addRow("Source:", self.combo_cam_type)
+        self._lbl_source = QLabel(t("source"))
+        form.addRow(self._lbl_source, self.combo_cam_type)
         self.combo_camera = QComboBox()
-        cameras = Camera.list_cameras(max_count=5)
+        cameras = []
+        for i in range(5):
+            try:
+                import cv2
+                import sys
+                cap = cv2.VideoCapture(i, cv2.CAP_DSHOW) if sys.platform == "win32" else cv2.VideoCapture(i)
+                if cap.isOpened():
+                    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                    fps = int(cap.get(cv2.CAP_PROP_FPS))
+                    cameras.append({"index": i, "width": w, "height": h, "fps": fps})
+                    cap.release()
+            except Exception:
+                pass
+            self._pulse_splash()
         for cam in cameras:
             self.combo_camera.addItem(
-                f"Camera {cam['index']} ({cam['width']}x{cam['height']})", cam["index"])
-        self._lbl_camera = QLabel("Camera:")
+                t("camera_item").format(cam['index'], cam['width'], cam['height']), cam["index"])
+        self._lbl_camera = QLabel(t("camera"))
         form.addRow(self._lbl_camera, self.combo_camera)
         self.edit_url = QLineEdit()
         self.edit_url.setPlaceholderText("rtsp://192.168.1.100:554/stream")
-        self._lbl_url = QLabel("URL:")
+        self._lbl_url = QLabel(t("url"))
         form.addRow(self._lbl_url, self.edit_url)
         self.spin_width = QSpinBox(); self.spin_width.setRange(160, 1920); self.spin_width.setSingleStep(32)
-        form.addRow("Width:", self.spin_width)
+        self._lbl_width = QLabel(t("width"))
+        form.addRow(self._lbl_width, self.spin_width)
         self.spin_height = QSpinBox(); self.spin_height.setRange(120, 1080); self.spin_height.setSingleStep(32)
-        form.addRow("Height:", self.spin_height)
+        self._lbl_height = QLabel(t("height"))
+        form.addRow(self._lbl_height, self.spin_height)
         self.spin_fps = QSpinBox(); self.spin_fps.setRange(15, 120)
-        form.addRow("FPS:", self.spin_fps)
-        self.chk_mirror = QCheckBox("Mirror")
-        form.addRow("Mirror:", self.chk_mirror)
-        self.chk_enhance = QCheckBox("Enhance low light (CLAHE)")
-        form.addRow("Enhance:", self.chk_enhance)
+        self._lbl_fps_cam = QLabel(t("fps"))
+        form.addRow(self._lbl_fps_cam, self.spin_fps)
+        self.chk_mirror = QCheckBox(t("mirror"))
+        form.addRow(self.chk_mirror)
+        self.chk_enhance = QCheckBox(t("enhance"))
+        form.addRow(self.chk_enhance)
         layout.addLayout(form)
 
         # IP camera stats (hidden by default)
-        self._ip_stats_group = QGroupBox("Stream Stats")
-        stats_form = QFormLayout()
+        self._ip_stats_group = QGroupBox(t("stream_stats"))
+        self._stats_form = QFormLayout()
         self.lbl_ip_fps = QLabel("--")
         self.lbl_ip_fps.setFont(QFont("Consolas", 11))
-        stats_form.addRow("FPS:", self.lbl_ip_fps)
+        self._lbl_stat_fps = QLabel(t("fps"))
+        self._stats_form.addRow(self._lbl_stat_fps, self.lbl_ip_fps)
         self.lbl_ip_frame_time = QLabel("--")
         self.lbl_ip_frame_time.setFont(QFont("Consolas", 11))
-        stats_form.addRow("Frame time:", self.lbl_ip_frame_time)
+        self._lbl_stat_ft = QLabel(t("frame_time"))
+        self._stats_form.addRow(self._lbl_stat_ft, self.lbl_ip_frame_time)
         self.lbl_ip_bandwidth = QLabel("--")
         self.lbl_ip_bandwidth.setFont(QFont("Consolas", 11))
-        stats_form.addRow("Bandwidth:", self.lbl_ip_bandwidth)
+        self._lbl_stat_bw = QLabel(t("bandwidth"))
+        self._stats_form.addRow(self._lbl_stat_bw, self.lbl_ip_bandwidth)
         self.lbl_ip_resolution = QLabel("--")
         self.lbl_ip_resolution.setFont(QFont("Consolas", 11))
-        stats_form.addRow("Resolution:", self.lbl_ip_resolution)
+        self._lbl_stat_res = QLabel(t("resolution"))
+        self._stats_form.addRow(self._lbl_stat_res, self.lbl_ip_resolution)
         self.lbl_ip_frames = QLabel("--")
         self.lbl_ip_frames.setFont(QFont("Consolas", 11))
-        stats_form.addRow("Frames:", self.lbl_ip_frames)
-        self._ip_stats_group.setLayout(stats_form)
+        self._lbl_stat_frames = QLabel(t("frames"))
+        self._stats_form.addRow(self._lbl_stat_frames, self.lbl_ip_frames)
+        self._ip_stats_group.setLayout(self._stats_form)
         self._ip_stats_group.setVisible(False)
         layout.addWidget(self._ip_stats_group)
 
         layout.addStretch()
-        self.tabs.addTab(tab, "Camera")
+        self.tabs.addTab(tab, t("tab_camera"))
 
     def _build_axes_tab(self):
         tab = QWidget()
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
         inner = QWidget(); layout = QVBoxLayout(inner)
+
+        profile_layout = QHBoxLayout()
+        self.combo_profile = QComboBox()
+        self.combo_profile.currentIndexChanged.connect(self._on_profile_changed)
+        profile_layout.addWidget(self.combo_profile, 1)
+        self.btn_new = QPushButton(t("btn_new"))
+        self.btn_new.setFixedWidth(80)
+        self.btn_new.clicked.connect(self._on_profile_new)
+        profile_layout.addWidget(self.btn_new)
+        btn_delete = QPushButton(t("btn_delete"))
+        btn_delete.setFixedWidth(80)
+        btn_delete.clicked.connect(self._on_profile_delete)
+        profile_layout.addWidget(btn_delete)
+        self.btn_delete = btn_delete
+        layout.addLayout(profile_layout)
+
         self._axis_widgets = {}
+        self._axis_form_labels = {}
         for axis_name in ["yaw", "pitch", "roll", "x", "y", "z"]:
             group = QGroupBox(axis_name.upper()); form = QFormLayout()
-            chk_enabled = QCheckBox("Enabled"); form.addRow("Enabled:", chk_enabled)
+            chk_enabled = QCheckBox(t("enabled"))
+            form.addRow(chk_enabled)
             spin_sensitivity = QDoubleSpinBox(); spin_sensitivity.setRange(0.1, 20.0); spin_sensitivity.setSingleStep(0.1)
-            form.addRow("Sensitivity:", spin_sensitivity)
+            lbl_sensitivity = QLabel(t("sensitivity"))
+            form.addRow(lbl_sensitivity, spin_sensitivity)
             spin_deadzone = QDoubleSpinBox(); spin_deadzone.setRange(0.0, 30.0); spin_deadzone.setSingleStep(0.5)
-            form.addRow("Deadzone:", spin_deadzone)
-            chk_inverted = QCheckBox("Inverted"); form.addRow("Inverted:", chk_inverted)
+            lbl_deadzone = QLabel(t("deadzone"))
+            form.addRow(lbl_deadzone, spin_deadzone)
+            chk_inverted = QCheckBox(t("inverted"))
+            form.addRow(chk_inverted)
             group.setLayout(form); layout.addWidget(group)
             self._axis_widgets[axis_name] = {"enabled": chk_enabled, "sensitivity": spin_sensitivity,
-                                              "deadzone": spin_deadzone, "inverted": chk_inverted}
+                                               "deadzone": spin_deadzone, "inverted": chk_inverted}
+            self._axis_form_labels[axis_name] = {"sensitivity": lbl_sensitivity,
+                                                   "deadzone": lbl_deadzone}
         layout.addStretch()
         scroll.setWidget(inner)
         tab_layout = QVBoxLayout(tab); tab_layout.addWidget(scroll)
-        self.tabs.addTab(tab, "Axes")
+        self.tabs.addTab(tab, t("tab_axes"))
 
     def _build_output_tab(self):
         tab = QWidget(); layout = QVBoxLayout(tab)
-        form = QFormLayout()
+        self._output_form = QFormLayout()
         self.combo_protocol = QComboBox()
-        protocols = ["FreeTrack (Windows)", "UDP (Cross-platform)"] if IS_WINDOWS else ["UDP"]
+        protocols = [t("freetrack"), t("udp")] if IS_WINDOWS else [t("udp")]
         self.combo_protocol.addItems(protocols)
         self.combo_protocol.currentIndexChanged.connect(self._on_protocol_changed)
-        form.addRow("Protocol:", self.combo_protocol)
-        self.lbl_ft_status = QLabel("Not running"); form.addRow("Status:", self.lbl_ft_status)
+        self._lbl_protocol = QLabel(t("protocol"))
+        self._output_form.addRow(self._lbl_protocol, self.combo_protocol)
+        self.lbl_ft_status = QLabel(t("status_not_running"))
+        self._lbl_ft_status_title = QLabel(t("tab_status") + ":")
+        self._output_form.addRow(self._lbl_ft_status_title, self.lbl_ft_status)
 
         # UDP settings
         self._udp_widget = QWidget()
-        udp_form = QFormLayout(self._udp_widget)
-        udp_form.setContentsMargins(0, 0, 0, 0)
+        self._udp_form = QFormLayout(self._udp_widget)
+        self._udp_form.setContentsMargins(0, 0, 0, 0)
         self.edit_udp_host = QLineEdit("127.0.0.1")
-        udp_form.addRow("Host:", self.edit_udp_host)
+        self._lbl_host = QLabel(t("host"))
+        self._udp_form.addRow(self._lbl_host, self.edit_udp_host)
         self.spin_udp_port = QSpinBox(); self.spin_udp_port.setRange(1, 65535); self.spin_udp_port.setValue(4242)
-        udp_form.addRow("Port:", self.spin_udp_port)
+        self._lbl_port = QLabel(t("port"))
+        self._udp_form.addRow(self._lbl_port, self.spin_udp_port)
         layout.addWidget(self._udp_widget)
 
-        layout.addLayout(form); layout.addStretch()
-        self.tabs.addTab(tab, "Output")
+        layout.addLayout(self._output_form); layout.addStretch()
+        self.tabs.addTab(tab, t("tab_output"))
 
     def _build_log_tab(self):
         tab = QWidget(); layout = QVBoxLayout(tab)
@@ -299,9 +346,140 @@ class MainWindow(QMainWindow):
         self.log_text.setFont(QFont("Consolas", 9))
         self.log_text.setStyleSheet("background-color: #1e1e1e; color: #d4d4d4;")
         layout.addWidget(self.log_text)
-        btn_clear = QPushButton("Clear Log"); btn_clear.clicked.connect(self.log_text.clear)
+        btn_clear = QPushButton(t("btn_clear_log")); btn_clear.clicked.connect(self.log_text.clear)
         layout.addWidget(btn_clear)
-        self.tabs.addTab(tab, "Log")
+        self.tabs.addTab(tab, t("tab_log"))
+
+    def _build_about_tab(self):
+        import sys
+        tab = QWidget(); layout = QVBoxLayout(tab)
+        layout.setAlignment(Qt.AlignCenter)
+
+        self._about_title = QLabel(t("about_title"))
+        self._about_title.setFont(QFont("Segoe UI", 20, QFont.Bold))
+        self._about_title.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self._about_title)
+
+        self._about_version = QLabel(t("about_version"))
+        self._about_version.setFont(QFont("Segoe UI", 12))
+        self._about_version.setAlignment(Qt.AlignCenter)
+        self._about_version.setStyleSheet("color: #888;")
+        layout.addWidget(self._about_version)
+
+        layout.addSpacing(16)
+
+        self._about_desc = QLabel(t("about_desc"))
+        self._about_desc.setFont(QFont("Segoe UI", 10))
+        self._about_desc.setAlignment(Qt.AlignCenter)
+        self._about_desc.setWordWrap(True)
+        layout.addWidget(self._about_desc)
+
+        layout.addSpacing(16)
+
+        self._about_info = QLabel(
+            f"Python {sys.version.split()[0]}  |  "
+            f"PySide6  |  MediaPipe  |  OpenCV\n"
+            f"{t('platform')} {sys.platform}"
+        )
+        self._about_info.setFont(QFont("Consolas", 9))
+        self._about_info.setAlignment(Qt.AlignCenter)
+        self._about_info.setStyleSheet("color: #aaa;")
+        layout.addWidget(self._about_info)
+
+        layout.addSpacing(16)
+
+        lang_layout = QHBoxLayout()
+        lang_layout.setAlignment(Qt.AlignCenter)
+        self._about_lang_label = QLabel(t("lang"))
+        lang_layout.addWidget(self._about_lang_label)
+        self.combo_language = QComboBox()
+        for code, name in available_languages().items():
+            self.combo_language.addItem(name, code)
+        # Select current language
+        current = get_language()
+        for i in range(self.combo_language.count()):
+            if self.combo_language.itemData(i) == current:
+                self.combo_language.setCurrentIndex(i)
+                break
+        self.combo_language.currentIndexChanged.connect(self._on_language_changed)
+        lang_layout.addWidget(self.combo_language)
+        layout.addLayout(lang_layout)
+
+        layout.addSpacing(16)
+
+        self._about_links = QLabel(
+            '<a href="https://github.com">' + t("about_github") + '</a>'
+        )
+        self._about_links.setFont(QFont("Segoe UI", 10))
+        self._about_links.setAlignment(Qt.AlignCenter)
+        self._about_links.setOpenExternalLinks(True)
+        layout.addWidget(self._about_links)
+
+        layout.addStretch()
+        self.tabs.addTab(tab, t("tab_about"))
+
+    def _on_language_changed(self, index):
+        lang = self.combo_language.currentData()
+        if lang:
+            set_language(lang)
+            self.app_settings.language = lang
+            self._refresh_ui_text()
+
+    def _refresh_ui_text(self):
+        self.setWindowTitle(t("window_title"))
+        self.preview_label.setText(t("camera_preview"))
+        self.btn_start.setText(t("btn_stop") if self.tracking_active else t("btn_start"))
+        self.btn_new.setText(t("btn_new"))
+        self.btn_delete.setText(t("btn_delete"))
+        self.tabs.setTabText(0, t("tab_camera"))
+        self.tabs.setTabText(1, t("tab_axes"))
+        self.tabs.setTabText(2, t("tab_output"))
+        self.tabs.setTabText(3, t("tab_log"))
+        self.tabs.setTabText(4, t("tab_about"))
+        self.lbl_status.setText(t("status_running") if self.tracking_active else t("status_stopped"))
+        self.lbl_ft_status.setText(t("status_running") if self.tracking_active else t("status_not_running"))
+        # Status tab
+        self._pose_group.setTitle(t("head_pose"))
+        self._lbl_yaw_title.setText(t("yaw"))
+        self._lbl_pitch_title.setText(t("pitch"))
+        self._lbl_roll_title.setText(t("roll"))
+        self._lbl_x_title.setText(t("x_axis"))
+        self._lbl_y_title.setText(t("y_axis"))
+        self._lbl_z_title.setText(t("z_axis"))
+        self._info_group.setTitle(t("info"))
+        self._lbl_conf_title.setText(t("confidence"))
+        self._lbl_fps_title.setText(t("fps"))
+        self._lbl_profile_title.setText(t("profile_name"))
+        self._lbl_status_title.setText(t("tab_status") + ":")
+        # Camera tab
+        self._lbl_source.setText(t("source"))
+        self._lbl_camera.setText(t("camera"))
+        self._lbl_url.setText(t("url"))
+        self._lbl_width.setText(t("width"))
+        self._lbl_height.setText(t("height"))
+        self._lbl_fps_cam.setText(t("fps"))
+        self._ip_stats_group.setTitle(t("stream_stats"))
+        self._lbl_stat_fps.setText(t("fps"))
+        self._lbl_stat_ft.setText(t("frame_time"))
+        self._lbl_stat_bw.setText(t("bandwidth"))
+        self._lbl_stat_res.setText(t("resolution"))
+        self._lbl_stat_frames.setText(t("frames"))
+        # Axes tab
+        for axis_name in ["yaw", "pitch", "roll", "x", "y", "z"]:
+            labels = self._axis_form_labels[axis_name]
+            labels["sensitivity"].setText(t("sensitivity"))
+            labels["deadzone"].setText(t("deadzone"))
+        # Output tab
+        self._lbl_protocol.setText(t("protocol"))
+        self._lbl_ft_status_title.setText(t("tab_status") + ":")
+        self._lbl_host.setText(t("host"))
+        self._lbl_port.setText(t("port"))
+        # About tab
+        self._about_title.setText(t("about_title"))
+        self._about_version.setText(t("about_version"))
+        self._about_desc.setText(t("about_desc"))
+        self._about_lang_label.setText(t("lang"))
+        self._about_links.setText('<a href="https://github.com">' + t("about_github") + '</a>')
 
     def append_log(self, message: str):
         self.log_text.append(message)
@@ -335,14 +513,15 @@ class MainWindow(QMainWindow):
             self._apply_profile()
             self.lbl_profile.setText(self.profile.name)
             log.info(f"Profile loaded: {self.profile.name}")
+            if self.tracking_active:
+                self.worker.update_profile(self.profile)
         except Exception as e:
             log.error(f"Failed to load profile: {e}", exc_info=True)
-            QMessageBox.warning(self, "Error", f"Failed to load profile:\n{e}")
+            QMessageBox.warning(self, t("status_error"), t("failed_load_profile").format(e))
         self._update_buttons_for_default()
 
     def _update_buttons_for_default(self):
         is_default = self.profile.name == "Default"
-        self.btn_save.setEnabled(not is_default)
         self.btn_delete.setEnabled(not is_default)
 
     def _apply_profile(self):
@@ -424,72 +603,39 @@ class MainWindow(QMainWindow):
             )
         return p
 
-    def _on_save(self):
-        self.profile = self._read_profile_from_ui()
-        # Default profile is immutable - save as new profile instead
-        if self.profile.name == "Default":
-            from PySide6.QtWidgets import QInputDialog
-            name, ok = QInputDialog.getText(self, "Save As", "Save as new profile:",
-                                             text="My Default")
-            if ok and name:
-                self.profile.name = name
-                path = PROFILES_DIR / f"{name.lower().replace(' ', '_')}.json"
-                try:
-                    save_profile(self.profile, path)
-                    self._current_profile_path = path
-                    self._populate_profiles()
-                    # Select the new profile
-                    for i in range(self.combo_profile.count()):
-                        if self.combo_profile.itemData(i) == str(path):
-                            self.combo_profile.setCurrentIndex(i); break
-                    log.info(f"Default profile saved as: {name}")
-                    QMessageBox.information(self, "Saved", f"Profile '{name}' created.")
-                except Exception as e:
-                    log.error(f"Failed to save profile: {e}", exc_info=True)
-                    QMessageBox.warning(self, "Error", f"Failed to save profile:\n{e}")
-            return
-        try:
-            if self._current_profile_path:
-                save_profile(self.profile, self._current_profile_path)
-                log.info(f"Profile saved: {self._current_profile_path.name}")
-            else:
-                path = PROFILES_DIR / f"{self.profile.name.lower().replace(' ', '_')}.json"
-                save_profile(self.profile, path)
-                self._current_profile_path = path
-                self._populate_profiles()
-                log.info(f"Profile saved as: {path.name}")
-            QMessageBox.information(self, "Saved", f"Profile '{self.profile.name}' saved.")
-        except Exception as e:
-            log.error(f"Failed to save profile: {e}", exc_info=True)
-            QMessageBox.warning(self, "Error", f"Failed to save profile:\n{e}")
-
     def _on_profile_new(self):
+        self.btn_new.setEnabled(False)
         from PySide6.QtWidgets import QInputDialog
-        name, ok = QInputDialog.getText(self, "New Profile", "Profile name:")
+        name, ok = QInputDialog.getText(self, t("new_profile"), t("profile_name_prompt"),
+                                         text=f"{self.profile.name} {t('copy_suffix')}")
         if ok and name:
-            new_profile = Profile(name=name)
+            new_profile = self._read_profile_from_ui()
+            new_profile.name = name
             path = PROFILES_DIR / f"{name.lower().replace(' ', '_')}.json"
             try:
                 save_profile(new_profile, path)
                 self._populate_profiles()
-                # Select new
                 for i in range(self.combo_profile.count()):
                     if self.combo_profile.itemData(i) == str(path):
                         self.combo_profile.setCurrentIndex(i); break
-                log.info(f"New profile created: {name}")
+                log.info(f"New profile created (duplicate): {name}")
             except Exception as e:
                 log.error(f"Failed to create profile: {e}", exc_info=True)
-                QMessageBox.warning(self, "Error", f"Failed to create profile:\n{e}")
+                QMessageBox.warning(self, t("status_error"), t("failed_create_profile").format(e))
+        self.btn_new.setEnabled(True)
 
     def _on_profile_delete(self):
+        self.btn_delete.setEnabled(False)
         if not self._current_profile_path:
+            self.btn_delete.setEnabled(True)
             return
         if self.profile.name == "Default":
-            QMessageBox.information(self, "Cannot Delete", "The 'Default' profile cannot be deleted.")
+            QMessageBox.information(self, t("cannot_delete"), t("cannot_delete_msg"))
+            self.btn_delete.setEnabled(True)
             return
         reply = QMessageBox.question(
-            self, "Delete Profile",
-            f"Delete profile '{self.profile.name}'?",
+            self, t("delete_profile"),
+            t("delete_confirm").format(self.profile.name),
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
         if reply == QMessageBox.Yes:
             self._current_profile_path.unlink(missing_ok=True)
@@ -498,48 +644,8 @@ class MainWindow(QMainWindow):
             if self.combo_profile.count() > 0:
                 self.combo_profile.setCurrentIndex(0)
             self.profile = load_profile(self.combo_profile.currentData())
-            self._update_buttons_for_default()
-
-    def _on_profile_duplicate(self):
-        from PySide6.QtWidgets import QInputDialog
-        name, ok = QInputDialog.getText(self, "Duplicate Profile", "New name:",
-                                         text=f"{self.profile.name} (copy)")
-        if ok and name:
-            new_profile = self._read_profile_from_ui()
-            new_profile.name = name
-            path = PROFILES_DIR / f"{name.lower().replace(' ', '_')}.json"
-            try:
-                save_profile(new_profile, path)
-                self._populate_profiles()
-                log.info(f"Profile duplicated: {name}")
-            except Exception as e:
-                log.error(f"Failed to duplicate profile: {e}", exc_info=True)
-                QMessageBox.warning(self, "Error", f"Failed to duplicate profile:\n{e}")
-
-    def _on_profile_export(self):
-        path, _ = QFileDialog.getSaveFileName(
-            self, "Export Profile", f"{self.profile.name}.json", "JSON Files (*.json)")
-        if path:
-            try:
-                save_profile(self._read_profile_from_ui(), path)
-                log.info(f"Profile exported: {path}")
-            except Exception as e:
-                log.error(f"Failed to export profile: {e}", exc_info=True)
-                QMessageBox.warning(self, "Error", f"Failed to export profile:\n{e}")
-
-    def _on_profile_import(self):
-        path, _ = QFileDialog.getOpenFileName(
-            self, "Import Profile", "", "JSON Files (*.json)")
-        if path:
-            try:
-                imported = load_profile(path)
-                dest = PROFILES_DIR / Path(path).name
-                save_profile(imported, dest)
-                self._populate_profiles()
-                log.info(f"Profile imported: {imported.name}")
-            except Exception as e:
-                log.error(f"Failed to import profile: {e}", exc_info=True)
-                QMessageBox.warning(self, "Error", f"Failed to import profile:\n{e}")
+        self._update_buttons_for_default()
+        self.btn_delete.setEnabled(True)
 
     # ── Tracking ─────────────────────────────────────────────────
     @Slot(object)
@@ -580,17 +686,26 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def _on_worker_error(self, msg):
         log.error(f"Worker error: {msg}")
-        self.lbl_status.setText("Error!")
-        QMessageBox.warning(self, "Error", msg)
+        self.lbl_status.setText(t("status_error"))
+        QMessageBox.warning(self, t("status_error"), msg)
 
     @Slot()
     def _on_worker_stopped(self):
         self.tracking_active = False
-        self.btn_start.setText("Start")
-        self.lbl_status.setText("Stopped")
-        self.lbl_ft_status.setText("Not running")
+        self.btn_start.setText(t("btn_start"))
+        self.btn_start.setStyleSheet("QPushButton { background-color: #2ecc71; color: white; font-weight: bold; } QPushButton:hover { background-color: #27ae60; }")
+        self.lbl_status.setText(t("status_stopped"))
+        self.lbl_ft_status.setText(t("status_not_running"))
+        self.lbl_yaw.setText("0.00")
+        self.lbl_pitch.setText("0.00")
+        self.lbl_roll.setText("0.00")
+        self.lbl_x.setText("0.00")
+        self.lbl_y.setText("0.00")
+        self.lbl_z.setText("0.00")
+        self.lbl_confidence.setText("0.00")
+        self.lbl_fps.setText("0")
         self.preview_label.clear()
-        self.preview_label.setText("Camera preview")
+        self.preview_label.setText(t("camera_preview"))
         is_ip = self.combo_cam_type.currentIndex() == 1
         self.preview_label.setVisible(not is_ip)
         self._set_controls_enabled(True)
@@ -639,28 +754,38 @@ class MainWindow(QMainWindow):
 
     @Slot()
     def _on_start_stop(self):
+        if getattr(self, '_btn_locked', False):
+            return
+        self._debounce(self.btn_start)
         if self.tracking_active: self._stop_tracking()
         else: self._start_tracking()
 
     def _start_tracking(self):
         self.profile = self._read_profile_from_ui()
         log.info(f"Starting tracking: {self.profile.name}")
+        self.btn_start.setText("⏳")
+        self.btn_start.setStyleSheet("QPushButton { background-color: #f39c12; color: white; font-weight: bold; font-size: 16px; } QPushButton:hover { background-color: #e67e22; }")
+        self.lbl_status.setText(t("status_running"))
+        self.lbl_ft_status.setText(t("status_running"))
+        self._set_controls_enabled(False)
+        QTimer.singleShot(800, self._do_start_tracking)
+
+    def _do_start_tracking(self):
         self.worker.start_tracking(self.profile)
         self.tracking_active = True
-        self.btn_start.setText("Stop")
-        self.lbl_status.setText("Running")
-        self.lbl_ft_status.setText("Running")
-        self._set_controls_enabled(False)
+        self.btn_start.setText(t("btn_stop"))
+        self.btn_start.setStyleSheet("QPushButton { background-color: #e74c3c; color: white; font-weight: bold; } QPushButton:hover { background-color: #c0392b; }")
 
     def _stop_tracking(self):
         log.info("Stopping tracking...")
         self.worker.stop_tracking()
         self.tracking_active = False
-        self.btn_start.setText("Start")
-        self.lbl_status.setText("Stopped")
-        self.lbl_ft_status.setText("Not running")
+        self.btn_start.setText(t("btn_start"))
+        self.btn_start.setStyleSheet("QPushButton { background-color: #2ecc71; color: white; font-weight: bold; } QPushButton:hover { background-color: #27ae60; }")
+        self.lbl_status.setText(t("status_stopped"))
+        self.lbl_ft_status.setText(t("status_not_running"))
         self.preview_label.clear()
-        self.preview_label.setText("Camera preview")
+        self.preview_label.setText(t("camera_preview"))
         is_ip = self.combo_cam_type.currentIndex() == 1
         self.preview_label.setVisible(not is_ip)
         self._set_controls_enabled(True)
@@ -668,12 +793,8 @@ class MainWindow(QMainWindow):
 
     def _set_controls_enabled(self, enabled: bool):
         self.combo_profile.setEnabled(enabled)
-        self.btn_save.setEnabled(enabled)
         self.btn_new.setEnabled(enabled)
         self.btn_delete.setEnabled(enabled)
-        self.btn_duplicate.setEnabled(enabled)
-        self.btn_export.setEnabled(enabled)
-        self.btn_import.setEnabled(enabled)
         self.combo_cam_type.setEnabled(enabled)
         self.combo_camera.setEnabled(enabled)
         self.edit_url.setEnabled(enabled)
@@ -689,41 +810,15 @@ class MainWindow(QMainWindow):
             self._update_buttons_for_default()
 
     @Slot()
-    def _on_center(self):
-        if not self.tracking_active:
-            return
-        try:
-            dialog = CenterDialog(
-                get_pose_func=lambda: self.worker.get_raw_pose(),
-                get_frame_func=lambda: self.worker.get_last_frame().image if self.worker.get_last_frame() else None,
-                on_centered=self._apply_center,
-            )
-            dialog.exec()
-        except Exception as e:
-            log.error(f"Center dialog error: {e}", exc_info=True)
-
-    def _apply_center(self, pose: Pose | None):
-        if pose is None:
-            log.info("Center cancelled")
-            return
-        self.center_pose = Pose(
-            yaw=pose.yaw,
-            pitch=pose.pitch,
-            roll=pose.roll,
-            x=pose.x,
-            y=pose.y,
-            z=pose.z,
-        )
-        self.worker.set_center_pose(self.center_pose)
-        log.info(f"Center set: yaw={self.center_pose.yaw:+.1f} pitch={self.center_pose.pitch:+.1f} roll={self.center_pose.roll:+.1f}")
-
-    @Slot()
-    def _on_reset(self):
-        self.center_pose = Pose()
-        self.worker.set_center_pose(Pose())
-        log.info("Center reset")
-
     def closeEvent(self, event):
+        if self.tracking_active:
+            reply = QMessageBox.question(
+                self, t("warning"),
+                t("confirm_exit"),
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+            if reply == QMessageBox.No:
+                event.ignore()
+                return
         try:
             self._stop_tracking()
             save_settings(self.app_settings)

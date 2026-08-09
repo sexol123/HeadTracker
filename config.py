@@ -88,6 +88,8 @@ class AppSettings:
     last_profile: str = "Default"
     auto_start: bool = False
     show_overlay: bool = True
+    language: str = "en"
+    first_run: bool = True
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -98,6 +100,8 @@ class AppSettings:
             last_profile=data.get("last_profile", "Default"),
             auto_start=data.get("auto_start", False),
             show_overlay=data.get("show_overlay", True),
+            language=data.get("language", "en"),
+            first_run=data.get("first_run", True),
         )
 
 

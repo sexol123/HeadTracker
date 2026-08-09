@@ -9,10 +9,12 @@ os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
 os.environ.setdefault("QT_SCALE_FACTOR_ROUNDING_POLICY", "PassThrough")
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication
+from PySide6.QtWidgets import QApplication, QSplashScreen
+from PySide6.QtGui import QPixmap, QPainter, QColor, QFont
 
 from ui.main_window import MainWindow
 from config import load_profile, load_settings, PROFILES_DIR
+from i18n import set_language, t
 
 LOGS_DIR = Path(__file__).parent / "logs"
 LOGS_DIR.mkdir(exist_ok=True)
@@ -80,6 +82,35 @@ def main():
     app = QApplication(sys.argv)
     log.info("QApplication created")
 
+    # Splash screen
+    def _draw_splash(dots):
+        pix = QPixmap(400, 250)
+        pix.fill(QColor("#1a1a2e"))
+        p = QPainter(pix)
+        p.setPen(QColor("#00d4ff"))
+        p.setFont(QFont("Segoe UI", 24, QFont.Bold))
+        p.drawText(pix.rect().adjusted(0, 40, 0, -80), Qt.AlignCenter, "HeadTracker")
+        p.setPen(QColor("#888888"))
+        p.setFont(QFont("Segoe UI", 11))
+        p.drawText(pix.rect().adjusted(0, 150, 0, 0), Qt.AlignHCenter | Qt.AlignTop, t("splash_loading") + dots)
+        p.end()
+        return pix
+
+    splash = QSplashScreen(_draw_splash("."))
+    splash.show()
+    app.processEvents()
+
+    _dot_count = 0
+    def _update_splash():
+        nonlocal _dot_count
+        _dot_count = (_dot_count + 1) % 6
+        splash.setPixmap(_draw_splash("." * (_dot_count or 1)))
+
+    from PySide6.QtCore import QTimer
+    _splash_timer = QTimer()
+    _splash_timer.timeout.connect(_update_splash)
+    _splash_timer.start(400)
+
     try:
         settings = load_settings()
         log.info(f"Settings loaded: last_profile={settings.last_profile}")
@@ -87,6 +118,9 @@ def main():
         log.warning(f"Failed to load settings, using defaults: {e}")
         from config import AppSettings
         settings = AppSettings()
+
+    # Apply language setting
+    set_language(settings.language)
 
     # Load last used profile
     try:
@@ -110,6 +144,8 @@ def main():
         window = MainWindow(profile)
         ui_handler.set_window(window)
         window.show()
+        _splash_timer.stop()
+        splash.finish(window)
         log.info("Main window shown — entering event loop")
     except Exception as e:
         log.critical(f"Failed to create main window: {e}", exc_info=True)

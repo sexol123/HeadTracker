@@ -5,6 +5,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QImage, QPixmap, QFont, QKeyEvent
 
 from tracker import Pose
+from i18n import t
 
 log = logging.getLogger("center_dialog")
 
@@ -17,7 +18,7 @@ class CenterDialog(QDialog):
         self._on_centered = on_centered
         self._current_pose = Pose()
 
-        self.setWindowTitle("Center")
+        self.setWindowTitle(t("center_title"))
         self.showFullScreen()
         self.setFocusPolicy(Qt.StrongFocus)
         self.setStyleSheet("background-color: #0a0a1a;")
@@ -34,7 +35,7 @@ class CenterDialog(QDialog):
         center_layout = QVBoxLayout(center_widget)
         center_layout.setAlignment(Qt.AlignCenter)
 
-        self.lbl_instruction = QLabel("Look at the target and press the button")
+        self.lbl_instruction = QLabel(t("center_instruction"))
         self.lbl_instruction.setAlignment(Qt.AlignCenter)
         self.lbl_instruction.setFont(QFont("Segoe UI", 18))
         self.lbl_instruction.setStyleSheet("color: #cccccc; background: transparent;")
@@ -46,7 +47,7 @@ class CenterDialog(QDialog):
         self.lbl_status.setStyleSheet("color: #ffff00; background: transparent;")
         center_layout.addWidget(self.lbl_status)
 
-        self.btn_center = QPushButton("CENTER")
+        self.btn_center = QPushButton(t("btn_center_big"))
         self.btn_center.setFixedSize(200, 200)
         self.btn_center.setFont(QFont("Segoe UI", 22, QFont.Bold))
         self.btn_center.setStyleSheet("""
@@ -66,7 +67,7 @@ class CenterDialog(QDialog):
         self.btn_center.clicked.connect(self._on_button_clicked)
         center_layout.addWidget(self.btn_center, alignment=Qt.AlignCenter)
 
-        self.lbl_hint = QLabel("ESC to cancel")
+        self.lbl_hint = QLabel(t("center_hint"))
         self.lbl_hint.setAlignment(Qt.AlignCenter)
         self.lbl_hint.setFont(QFont("Segoe UI", 11))
         self.lbl_hint.setStyleSheet("color: #888888; background: transparent;")
@@ -111,10 +112,10 @@ class CenterDialog(QDialog):
 
             # Face status
             if pose.confidence > 0:
-                cv2.putText(overlay, f"Face OK  Y:{pose.yaw:+.1f} P:{pose.pitch:+.1f}",
+                cv2.putText(overlay, f"{t('center_face_ok')}  Y:{pose.yaw:+.1f} P:{pose.pitch:+.1f}",
                             (10, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 0), 1)
             else:
-                cv2.putText(overlay, "No face - look at camera",
+                cv2.putText(overlay, t("center_no_face_camera"),
                             (10, h - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 1)
 
             rgb = cv2.cvtColor(overlay, cv2.COLOR_BGR2RGB)
@@ -127,7 +128,7 @@ class CenterDialog(QDialog):
 
     def _on_button_clicked(self):
         if self._current_pose.confidence <= 0:
-            self.lbl_status.setText("No face detected! Look at the camera.")
+            self.lbl_status.setText(t("center_no_face"))
             log.info("Center button pressed but no face detected")
             return
         log.info(f"Center button pressed, confidence={self._current_pose.confidence:.2f}")
