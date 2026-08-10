@@ -343,6 +343,10 @@ class MainWindow(QMainWindow):
         self.btn_cam_center_reset.clicked.connect(self._on_cam_center_reset)
         center_layout.addWidget(self.btn_cam_center_reset)
         adapt_form.addRow(center_layout)
+        self.chk_save_center = QCheckBox(t("save_center_to_profile"))
+        self.chk_save_center.setToolTip(t("save_center_to_profile_tip"))
+        self.chk_save_center.toggled.connect(self._on_save_center_toggled)
+        adapt_form.addRow(self.chk_save_center)
 
         self.btn_cam_setup = QPushButton(t("cam_setup_btn"))
         self.btn_cam_setup.clicked.connect(self._on_cam_setup)
@@ -974,6 +978,14 @@ class MainWindow(QMainWindow):
             self.lbl_status.setText(t("cam_center_need_tracking"))
             return
         if self.worker.recenter_camera():
+            if self.chk_save_center.isChecked():
+                pose = self.worker.get_raw_pose()
+                self.profile.center_pose = {
+                    "yaw": pose.yaw, "pitch": pose.pitch, "roll": pose.roll,
+                    "x": pose.x, "y": pose.y, "z": pose.z,
+                }
+                self._profile_autosave_timer.start()
+                log.info(f"Center saved to profile: {self.profile.name}")
             self.lbl_status.setText(t("cam_center_ok"))
             log.info(t("cam_center_ok"))
         else:
@@ -982,8 +994,21 @@ class MainWindow(QMainWindow):
 
     def _on_cam_center_reset(self):
         self.worker.reset_camera_center()
+        if self.chk_save_center.isChecked() and self.profile.center_pose is not None:
+            self.profile.center_pose = None
+            self._profile_autosave_timer.start()
+            log.info(f"Center cleared from profile: {self.profile.name}")
         self.lbl_status.setText(t("cam_center_reset_ok"))
         log.info("Camera center cleared")
+
+    def _on_save_center_toggled(self, checked):
+        if checked and not self.tracking_active:
+            log.info("Save center to profile: will apply to next Start")
+            return
+        if not checked and self.profile.center_pose is not None:
+            self.profile.center_pose = None
+            self._profile_autosave_timer.start()
+            log.info("Center removed from profile")
 
     def _on_cam_setup(self):
         from ui.cam_setup_dialog import CamSetupDialog

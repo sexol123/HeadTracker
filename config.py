@@ -22,6 +22,7 @@ class AxisConfig:
 class Profile:
     name: str = "Default"
     axes: dict[str, AxisConfig] = field(default_factory=dict)
+    center_pose: dict | None = None
 
     def __post_init__(self):
         if not self.axes:
@@ -49,6 +50,7 @@ class Profile:
         return cls(
             name=data.get("name", "Default"),
             axes=axes,
+            center_pose=data.get("center_pose"),
         )
 
 

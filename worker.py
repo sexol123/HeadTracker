@@ -143,6 +143,7 @@ class TrackingWorker(QThread):
                 smoothing=settings.pose_smoothing,
                 calibration=calibration,
             )
+            self._apply_profile_center(calibration, profile)
             with QMutexLocker(self._mutex):
                 self._calibration = calibration
                 self._tracker = tracker
@@ -336,6 +337,25 @@ class TrackingWorker(QThread):
             roll=settings.cam_rotation_roll,
             fov=settings.camera_fov,
         )
+
+    @staticmethod
+    def _apply_profile_center(calibration, profile: Profile | None) -> bool:
+        """Apply the center pose stored in the profile (if any) to the
+        calibration. Returns True when a center was applied."""
+        if profile is None:
+            return False
+        cp = profile.center_pose
+        if not isinstance(cp, dict):
+            return False
+        calibration.set_center(
+            float(cp.get("yaw", 0.0)),
+            float(cp.get("pitch", 0.0)),
+            float(cp.get("roll", 0.0)),
+            float(cp.get("x", 0.0)),
+            float(cp.get("y", 0.0)),
+            float(cp.get("z", 0.0)),
+        )
+        return True
 
     def recenter_camera(self) -> bool:
         """Capture the current pose as the neutral center. Returns True on success."""
