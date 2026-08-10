@@ -21,6 +21,9 @@ except ImportError:
 log = logging.getLogger("worker")
 
 TOGGLE_DEBOUNCE = 0.3
+MAX_CAMERA_RESTARTS = 5      # allowed restarts per RECONNECT_WINDOW before giving up
+RECONNECT_WINDOW = 60.0      # sliding window (seconds)
+RECONNECT_INTERVAL = 3.0     # minimum time between restart attempts
 
 
 class TrackingWorker(QThread):
@@ -45,6 +48,8 @@ class TrackingWorker(QThread):
         self._last_mouse_hotkey: str | None = None
         self._last_mouse_stop_mode: str | None = None
         self._hotkey_request: AppSettings | None = None
+        self._last_reconnect_attempt = 0.0
+        self._reconnect_times: list[float] = []
         self._calibration: CameraCalibration | None = None
         self._mutex = QMutex()
         self._last_raw_pose = Pose()
@@ -199,9 +204,14 @@ class TrackingWorker(QThread):
 
             frame = self._camera.get_frame()
             if frame is None:
+                with QMutexLocker(self._mutex):
+                    settings_now = self._settings
+                if settings_now is not None:
+                    self._maybe_restart_camera(settings_now)
                 time.sleep(0.005)
                 continue
 
+            self._mark_camera_healthy()
             self._last_frame = frame
 
             with QMutexLocker(self._mutex):
@@ -495,6 +505,76 @@ class TrackingWorker(QThread):
             self._start_mouse_hotkey(request)
         except Exception as e:
             log.warning(f"Failed to re-apply mouse hotkey: {e}")
+
+    @staticmethod
+    def _camera_start_kwargs(settings: AppSettings) -> dict:
+        common = dict(
+            mirror=settings.mirror,
+            rotation=settings.camera_rotation,
+            enhance=settings.image_enhance,
+        )
+        if settings.camera_source == "websocket":
+            return dict(url=settings.camera_url, **common)
+        return dict(
+            index=settings.camera_index,
+            width=settings.camera_width,
+            height=settings.camera_height,
+            fps=settings.camera_fps,
+            url=settings.camera_url,
+            **common,
+        )
+
+    def _maybe_restart_camera(self, settings: AppSettings):
+        """Detect a stalled camera (e.g. after sleep/hibernate) and restart the
+        stream with the current settings. Must run in the worker thread."""
+        if not self._running:
+            return
+        cam = self._camera
+        if cam is None or not cam.stats.stalled:
+            return
+
+        now = time.perf_counter()
+        if now - self._last_reconnect_attempt < RECONNECT_INTERVAL:
+            return
+
+        cutoff = now - RECONNECT_WINDOW
+        self._reconnect_times = [t for t in self._reconnect_times if t > cutoff]
+        if len(self._reconnect_times) >= MAX_CAMERA_RESTARTS:
+            log.error("Camera keeps stalling — giving up after %d restarts", MAX_CAMERA_RESTARTS)
+            self.error_occurred.emit(t("error_camera"))
+            self._running = False
+            return
+
+        self._last_reconnect_attempt = now
+        self._reconnect_times.append(now)
+        log.warning("Camera stalled (no frames) — restarting stream...")
+        self.output_log.emit("Camera stalled — reconnecting…")
+
+        try:
+            cam.stop()
+        except Exception as e:
+            log.warning(f"Error stopping camera before restart: {e}")
+
+        kwargs = self._camera_start_kwargs(settings)
+        try:
+            success = cam.start(**kwargs)
+        except Exception as e:
+            log.error(f"Camera restart failed: {e}", exc_info=True)
+            success = False
+
+        if not success:
+            log.error("Camera restart failed — stopping tracking")
+            self.error_occurred.emit(t("error_camera"))
+            self._running = False
+            return
+
+        log.info("Camera restarted successfully")
+        self.output_log.emit("Camera reconnected")
+
+    def _mark_camera_healthy(self):
+        """Reset the restart budget when frames flow again."""
+        self._reconnect_times.clear()
+        self._last_reconnect_attempt = 0.0
 
     def _cleanup(self):
         with QMutexLocker(self._mutex):

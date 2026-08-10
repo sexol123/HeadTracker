@@ -10,6 +10,8 @@ IS_WINDOWS = sys.platform == "win32"
 
 log = logging.getLogger("camera")
 
+STALL_TIMEOUT = 5.0  # seconds without a frame -> camera considered stalled
+
 
 def apply_clahe(frame: np.ndarray, clahe: cv2.CLAHE) -> np.ndarray:
     """Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to enhance low-light images."""
@@ -37,6 +39,7 @@ class CameraStats:
     total_frames: int = 0
     dropped_frames: int = 0
     resolution: str = ""
+    stalled: bool = False
 
 
 class Camera:
@@ -91,6 +94,7 @@ class Camera:
         self._last_frame_time = 0.0
         self._frame_count = 0
         self._drop_count = 0
+        self._stats.stalled = False
         if enhance:
             log.info("Image enhancement (CLAHE) enabled")
 
@@ -170,6 +174,10 @@ class Camera:
         if self._cap is None or not self._cap.isOpened():
             return None
 
+        now = time.perf_counter()
+        if self._last_frame_time > 0 and now - self._last_frame_time > STALL_TIMEOUT:
+            self._stats.stalled = True
+
         try:
             t0 = time.perf_counter()
             ret, frame = self._cap.read()
@@ -189,6 +197,8 @@ class Camera:
 
         self._frame_count += 1
         read_ms = (t1 - t0) * 1000.0
+        self._last_frame_time = time.perf_counter()
+        self._stats.stalled = False
 
         # Track frame times for FPS calculation (last 30 frames)
         self._frame_times.append(t1)
@@ -277,6 +287,7 @@ class WebSocketCamera:
         self._stats = CameraStats()
         self._frame_times: list[float] = []
         self._drop_count: int = 0
+        self._last_frame_time: float = 0.0
         self._clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
 
     def start(self, url: str, mirror: bool = False, rotation: int = 0, enhance: bool = False) -> bool:
@@ -302,6 +313,8 @@ class WebSocketCamera:
         self._running = True
         self._frame_times = []
         self._drop_count = 0
+        self._last_frame_time = 0.0
+        self._stats.stalled = False
 
         self._thread = threading.Thread(target=self._receive_loop, daemon=True)
         self._thread.start()
@@ -347,6 +360,8 @@ class WebSocketCamera:
                     with self._lock:
                         self._frame = frame
                         self._stats.total_frames += 1
+                        self._stats.stalled = False
+                        self._last_frame_time = t_now
                         h, w = frame.shape[:2]
                         self._stats.resolution = f"{w}x{h}"
 
@@ -396,10 +411,14 @@ class WebSocketCamera:
         return self.read()
 
     def read(self) -> CameraFrame | None:
+        now = time.perf_counter()
+        if self._last_frame_time > 0 and now - self._last_frame_time > STALL_TIMEOUT:
+            self._stats.stalled = True
         if not self._running or self._frame is None:
             return None
         with self._lock:
             frame = self._frame.copy()
+        self._stats.stalled = False
         if self._rotation == 90:
             frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
         elif self._rotation == 180:
