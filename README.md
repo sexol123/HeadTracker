@@ -9,6 +9,7 @@ Head tracking software for racing and flight simulators. Uses a regular USB webc
 - **Camera orientation** — Rotation (0°/90°/180°/270°) and mirror for sideways-mounted cameras
 - **FreeTrack 2.0 output** — Windows shared memory (Assetto Corsa, BeamNG, ETS2, DCS, 800+ games)
 - **UDP output** — Cross-platform network output (Linux, SteamOS, macOS)
+- **Mouse output** — Mouse-look or cursor control from head pose (velocity/absolute modes)
 - **Live overlay** — Face mesh, landmarks, and pose axes on camera preview
 - **Per-axis settings** — Sensitivity, deadzone, inversion for each axis
 - **Game presets** — Pre-configured profiles for popular simulators
@@ -174,12 +175,46 @@ For dim environments, enable CLAHE image enhancement:
 1. Camera tab → check `Enhance low light (CLAHE)`
 2. Adaptive histogram equalization improves face detection in poor lighting
 
+### Smoothing
+
+Status tab → **Smoothing** slider (0–100%) applies exponential smoothing to the
+whole head pose (yaw/pitch/roll and position) before it is sent to any protocol.
+Higher values feel smoother but add lag; start around 50%. It is reset when the
+face is lost and re-acquired.
+
 ### Output Protocols
 
 | Protocol | Platform | Use case |
 |----------|----------|----------|
 | FreeTrack | Windows | 800+ sim racing/flight games via shared memory |
 | UDP | All | Cross-platform network output, games that support UDP trackers |
+| Mouse | All | Moves the system mouse from head pose — mouse-look in games without tracker support |
+
+The Output tab shows a **protocol log** (updates every ~60 frames) with the raw
+pose and `conf` — useful to verify tracking before launching the game.
+
+### Mouse
+
+Useful for games that have no FreeTrack/UDP support but accept mouse input:
+
+1. Output tab → Protocol: `Mouse`
+2. **Mode: Velocity (mouse-look)** — while your head is turned, the view pans;
+   returning to center stops it. Good for racing/flight/FPS games with mouse-look.
+   **Mode: Absolute (cursor)** — the cursor is positioned on the screen
+   proportionally to yaw/pitch, useful for desktop navigation.
+3. **Mouse speed** — velocity: pixels per second per degree; absolute: pixels per degree.
+   Direction inversion and deadzone are taken from the profile axes (Yaw/Pitch).
+4. **Stop method** — the mouse moves only while you **hold** the hotkey
+   (default `F8`, release to stop), or **toggles** with each press.
+   Use it to pause the view without returning your head to center.
+
+Pose is smoothed (EMA) and a small minimum deadzone is applied so small head
+jitter (especially the pitch drift while turning your head sideways) does not
+move the cursor unexpectedly.
+
+> **Note:** some games read the mouse via Raw Input and ignore programmatically
+> injected movement (SendInput/pynput). Such games will not respond to Mouse output;
+> FreeTrack or UDP remain the reliable options there.
 
 ### Exit Confirmation
 

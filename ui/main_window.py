@@ -7,10 +7,10 @@ from PySide6.QtWidgets import (
     QLabel, QPushButton, QComboBox, QSpinBox, QCheckBox,
     QDoubleSpinBox, QGroupBox, QFormLayout, QSplitter,
     QTabWidget, QTextEdit, QLineEdit, QMessageBox,
-    QFileDialog, QScrollArea, QSystemTrayIcon, QMenu,
+    QFileDialog, QScrollArea, QSystemTrayIcon, QMenu, QSlider,
 )
 from PySide6.QtCore import Qt, Slot, QTimer
-from PySide6.QtGui import QImage, QPixmap, QFont, QIcon
+from PySide6.QtGui import QImage, QPixmap, QFont, QIcon, QFontMetricsF
 
 from worker import TrackingWorker
 from camera import Camera
@@ -27,6 +27,7 @@ from pathlib import Path
 
 log = logging.getLogger("ui")
 ICON_PATH = Path(__file__).parent.parent / "HeadTrackerIcon.png"
+MOUSE_HOTKEYS = [f"f{i}" for i in range(1, 13)] + ["space", "insert", "delete"]
 
 
 class MainWindow(QMainWindow):
@@ -61,6 +62,7 @@ class MainWindow(QMainWindow):
         self.worker.frame_ready.connect(self._on_worker_frame)
         self.worker.pose_ready.connect(self._on_worker_pose)
         self.worker.confidence_ready.connect(self._on_worker_confidence)
+        self.worker.output_log.connect(self._on_protocol_log)
         self.worker.error_occurred.connect(self._on_worker_error)
         self.worker.stopped.connect(self._on_worker_stopped)
         self.tracking_active = False
@@ -165,24 +167,31 @@ class MainWindow(QMainWindow):
         self._pose_group = QGroupBox(t("head_pose"))
         self._pose_form = QFormLayout()
         self.lbl_yaw = QLabel("0.00"); self.lbl_yaw.setFont(QFont("Consolas", 14))
+        self.lbl_yaw.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self._lbl_yaw_title = QLabel(t("yaw"))
         self._pose_form.addRow(self._lbl_yaw_title, self.lbl_yaw)
         self.lbl_pitch = QLabel("0.00"); self.lbl_pitch.setFont(QFont("Consolas", 14))
+        self.lbl_pitch.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self._lbl_pitch_title = QLabel(t("pitch"))
         self._pose_form.addRow(self._lbl_pitch_title, self.lbl_pitch)
         self.lbl_roll = QLabel("0.00"); self.lbl_roll.setFont(QFont("Consolas", 14))
+        self.lbl_roll.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self._lbl_roll_title = QLabel(t("roll"))
         self._pose_form.addRow(self._lbl_roll_title, self.lbl_roll)
         self.lbl_x = QLabel("0.00"); self.lbl_x.setFont(QFont("Consolas", 14))
+        self.lbl_x.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self._lbl_x_title = QLabel(t("x_axis"))
         self._pose_form.addRow(self._lbl_x_title, self.lbl_x)
         self.lbl_y = QLabel("0.00"); self.lbl_y.setFont(QFont("Consolas", 14))
+        self.lbl_y.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self._lbl_y_title = QLabel(t("y_axis"))
         self._pose_form.addRow(self._lbl_y_title, self.lbl_y)
         self.lbl_z = QLabel("0.00"); self.lbl_z.setFont(QFont("Consolas", 14))
+        self.lbl_z.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self._lbl_z_title = QLabel(t("z_axis"))
         self._pose_form.addRow(self._lbl_z_title, self.lbl_z)
         self._pose_group.setLayout(self._pose_form)
+        self._fix_pose_group_width()
 
         self._info_group = QGroupBox(t("info"))
         self._info_form = QFormLayout()
@@ -198,6 +207,20 @@ class MainWindow(QMainWindow):
         self.lbl_status = QLabel(t("status_stopped"))
         self._lbl_status_title = QLabel(t("tab_status") + ":")
         self._info_form.addRow(self._lbl_status_title, self.lbl_status)
+        self.slider_smoothing = QSlider(Qt.Horizontal)
+        self.slider_smoothing.setRange(0, 100)
+        self.slider_smoothing.setValue(50)
+        self.slider_smoothing.valueChanged.connect(self._on_smoothing_changed)
+        self.lbl_smoothing_val = QLabel("50%")
+        self.lbl_smoothing_val.setFixedWidth(40)
+        self._lbl_smoothing = QLabel(t("smoothing"))
+        self._lbl_smoothing.setToolTip(t("smoothing_tip"))
+        smoothing_row = QWidget()
+        smoothing_layout = QHBoxLayout(smoothing_row)
+        smoothing_layout.setContentsMargins(0, 0, 0, 0)
+        smoothing_layout.addWidget(self.slider_smoothing, 1)
+        smoothing_layout.addWidget(self.lbl_smoothing_val)
+        self._info_form.addRow(self._lbl_smoothing, smoothing_row)
         self._info_group.setLayout(self._info_form)
 
         status_layout = QHBoxLayout()
@@ -347,8 +370,12 @@ class MainWindow(QMainWindow):
         tab = QWidget(); layout = QVBoxLayout(tab)
         self._output_form = QFormLayout()
         self.combo_protocol = QComboBox()
-        protocols = [t("freetrack"), t("udp")] if IS_WINDOWS else [t("udp")]
-        self.combo_protocol.addItems(protocols)
+        if IS_WINDOWS:
+            self.combo_protocol.addItem(t("freetrack"), "freetrack")
+            self.combo_protocol.addItem(t("udp"), "udp")
+        else:
+            self.combo_protocol.addItem(t("udp"), "udp")
+        self.combo_protocol.addItem(t("mouse"), "mouse")
         self.combo_protocol.currentIndexChanged.connect(self._on_protocol_changed)
         self._lbl_protocol = QLabel(t("protocol"))
         self._output_form.addRow(self._lbl_protocol, self.combo_protocol)
@@ -368,7 +395,45 @@ class MainWindow(QMainWindow):
         self._udp_form.addRow(self._lbl_port, self.spin_udp_port)
         layout.addWidget(self._udp_widget)
 
-        layout.addLayout(self._output_form); layout.addStretch()
+        # Mouse settings
+        self._mouse_widget = QWidget()
+        self._mouse_form = QFormLayout(self._mouse_widget)
+        self._mouse_form.setContentsMargins(0, 0, 0, 0)
+        self.combo_mouse_mode = QComboBox()
+        self.combo_mouse_mode.addItem(t("mouse_mode_velocity"), "velocity")
+        self.combo_mouse_mode.addItem(t("mouse_mode_absolute"), "absolute")
+        self._lbl_mouse_mode = QLabel(t("mouse_mode"))
+        self._mouse_form.addRow(self._lbl_mouse_mode, self.combo_mouse_mode)
+        self.spin_mouse_speed = QDoubleSpinBox()
+        self.spin_mouse_speed.setRange(1.0, 200.0)
+        self.spin_mouse_speed.setSingleStep(1.0)
+        self.spin_mouse_speed.setValue(25.0)
+        self.spin_mouse_speed.setToolTip(t("mouse_speed_tip"))
+        self._lbl_mouse_speed = QLabel(t("mouse_speed"))
+        self._mouse_form.addRow(self._lbl_mouse_speed, self.spin_mouse_speed)
+        self.combo_mouse_stop = QComboBox()
+        self.combo_mouse_stop.addItem(t("mouse_stop_hold"), "hold")
+        self.combo_mouse_stop.addItem(t("mouse_stop_toggle"), "toggle")
+        self._lbl_mouse_stop = QLabel(t("mouse_stop_mode"))
+        self._mouse_form.addRow(self._lbl_mouse_stop, self.combo_mouse_stop)
+        self.combo_mouse_hotkey = QComboBox()
+        for k in MOUSE_HOTKEYS:
+            self.combo_mouse_hotkey.addItem(k.upper(), k)
+        self._lbl_mouse_hotkey = QLabel(t("mouse_hotkey"))
+        self._mouse_form.addRow(self._lbl_mouse_hotkey, self.combo_mouse_hotkey)
+        layout.addWidget(self._mouse_widget)
+
+        layout.addLayout(self._output_form)
+        layout.addStretch(1)
+
+        self._proto_log_title = QLabel(t("protocol_log"))
+        layout.addWidget(self._proto_log_title)
+        self.protocol_log = QTextEdit()
+        self.protocol_log.setReadOnly(True)
+        self.protocol_log.setFont(QFont("Consolas", 9))
+        self.protocol_log.setStyleSheet("background-color: #1e1e1e; color: #d4d4d4;")
+        layout.addWidget(self.protocol_log)
+
         self.tabs.addTab(tab, t("tab_output"))
 
     def _build_log_tab(self):
@@ -464,6 +529,17 @@ class MainWindow(QMainWindow):
             self.app_settings.language = lang
             self._refresh_ui_text()
 
+    @staticmethod
+    def _retranslate_combo(combo, items):
+        data = combo.currentData()
+        combo.blockSignals(True)
+        combo.clear()
+        for text, key in items:
+            combo.addItem(text, key)
+        idx = combo.findData(data)
+        combo.setCurrentIndex(idx if idx != -1 else 0)
+        combo.blockSignals(False)
+
     def _refresh_ui_text(self):
         self.setWindowTitle(t("window_title"))
         self.preview_label.setText(t("camera_preview"))
@@ -490,11 +566,14 @@ class MainWindow(QMainWindow):
         self._lbl_x_title.setText(t("x_axis"))
         self._lbl_y_title.setText(t("y_axis"))
         self._lbl_z_title.setText(t("z_axis"))
+        self._fix_pose_group_width()
         self._info_group.setTitle(t("info"))
         self._lbl_conf_title.setText(t("confidence"))
         self._lbl_fps_title.setText(t("fps"))
         self._lbl_profile_title.setText(t("profile_name"))
         self._lbl_status_title.setText(t("tab_status") + ":")
+        self._lbl_smoothing.setText(t("smoothing"))
+        self._lbl_smoothing.setToolTip(t("smoothing_tip"))
         # Camera tab
         self._lbl_source.setText(t("source"))
         self._lbl_camera.setText(t("camera"))
@@ -518,6 +597,16 @@ class MainWindow(QMainWindow):
         self._lbl_ft_status_title.setText(t("tab_status") + ":")
         self._lbl_host.setText(t("host"))
         self._lbl_port.setText(t("port"))
+        self._proto_log_title.setText(t("protocol_log"))
+        self._lbl_mouse_mode.setText(t("mouse_mode"))
+        self._lbl_mouse_speed.setText(t("mouse_speed"))
+        self.spin_mouse_speed.setToolTip(t("mouse_speed_tip"))
+        self._lbl_mouse_stop.setText(t("mouse_stop_mode"))
+        self._lbl_mouse_hotkey.setText(t("mouse_hotkey"))
+        self._retranslate_combo(
+            self.combo_mouse_stop,
+            [(t("mouse_stop_hold"), "hold"), (t("mouse_stop_toggle"), "toggle")],
+        )
         # About tab
         self._about_title.setText(t("about_title"))
         self._about_version.setText(t("about_version"))
@@ -609,11 +698,17 @@ class MainWindow(QMainWindow):
                 widgets["inverted"].setChecked(ax.inverted)
         self.lbl_profile.setText(p.name)
 
-        if IS_WINDOWS:
-            self.combo_protocol.setCurrentIndex(0 if s.output_protocol == "freetrack" else 1)
-        else:
-            self.combo_protocol.setCurrentIndex(0)
+        idx = self.combo_protocol.findData(s.output_protocol)
+        self.combo_protocol.setCurrentIndex(idx if idx != -1 else 0)
         self._on_protocol_changed(self.combo_protocol.currentIndex())
+        mode_idx = self.combo_mouse_mode.findData(s.mouse_mode)
+        self.combo_mouse_mode.setCurrentIndex(mode_idx if mode_idx != -1 else 0)
+        self.spin_mouse_speed.setValue(s.mouse_speed)
+        stop_idx = self.combo_mouse_stop.findData(s.mouse_stop_mode)
+        self.combo_mouse_stop.setCurrentIndex(stop_idx if stop_idx != -1 else 0)
+        hk_idx = self.combo_mouse_hotkey.findData(s.mouse_hotkey)
+        self.combo_mouse_hotkey.setCurrentIndex(hk_idx if hk_idx != -1 else 0)
+        self.slider_smoothing.setValue(int(s.pose_smoothing * 100))
         self.edit_udp_host.setText(s.udp_host)
         self.spin_udp_port.setValue(s.udp_port)
 
@@ -633,8 +728,23 @@ class MainWindow(QMainWindow):
             self.edit_url.setPlaceholderText("http://192.168.1.100:4444/video  or  rtsp://192.168.1.100:554/stream")
             self._lbl_url.setText(t("url"))
 
+    def _fix_pose_group_width(self):
+        fm = QFontMetricsF(QFont("Consolas", 14))
+        w_val = max(
+            fm.horizontalAdvance("-180.00"),
+            fm.horizontalAdvance("-9999.9"),
+        )
+        for lbl in (self.lbl_yaw, self.lbl_pitch, self.lbl_roll, self.lbl_x, self.lbl_y, self.lbl_z):
+            lbl.setFixedWidth(int(math.ceil(w_val)))
+        self._pose_group.setFixedWidth(int(math.ceil(self._pose_group.sizeHint().width())))
+
+    def _on_smoothing_changed(self, value):
+        self.lbl_smoothing_val.setText(f"{value}%")
+
     def _on_protocol_changed(self, index):
-        self._udp_widget.setVisible(not IS_WINDOWS or index == 1)
+        proto = self.combo_protocol.currentData()
+        self._udp_widget.setVisible(proto == "udp")
+        self._mouse_widget.setVisible(proto == "mouse")
 
     def _read_profile_from_ui(self) -> Profile:
         p = Profile(name=self.profile.name)
@@ -659,10 +769,12 @@ class MainWindow(QMainWindow):
         s.camera_rotation = self.combo_rotation.currentData() or 0
         s.mirror = self.chk_mirror.isChecked()
         s.image_enhance = self.chk_enhance.isChecked()
-        if IS_WINDOWS:
-            s.output_protocol = "freetrack" if self.combo_protocol.currentIndex() == 0 else "udp"
-        else:
-            s.output_protocol = "udp"
+        s.output_protocol = self.combo_protocol.currentData() or "udp"
+        s.mouse_mode = self.combo_mouse_mode.currentData() or "velocity"
+        s.mouse_speed = self.spin_mouse_speed.value()
+        s.mouse_stop_mode = self.combo_mouse_stop.currentData() or "hold"
+        s.mouse_hotkey = self.combo_mouse_hotkey.currentData() or "f8"
+        s.pose_smoothing = self.slider_smoothing.value() / 100.0
         s.udp_host = self.edit_udp_host.text().strip() or "127.0.0.1"
         s.udp_port = self.spin_udp_port.value()
 
@@ -755,6 +867,15 @@ class MainWindow(QMainWindow):
             self.frame_count = 0
             self.last_fps_time = now
             self.lbl_fps.setText(f"{self.display_fps:.0f}")
+
+    @Slot(str)
+    def _on_protocol_log(self, msg):
+        self.protocol_log.append(msg)
+        if self.protocol_log.document().blockCount() > 300:
+            cursor = self.protocol_log.textCursor()
+            cursor.movePosition(cursor.MoveOperation.Start)
+            cursor.movePosition(cursor.MoveOperation.Down, cursor.MoveMode.KeepAnchor, 100)
+            cursor.removeSelectedText()
 
     @Slot(str)
     def _on_worker_error(self, msg):
@@ -873,6 +994,11 @@ class MainWindow(QMainWindow):
         self.chk_mirror.setEnabled(enabled)
         self.chk_enhance.setEnabled(enabled)
         self.combo_protocol.setEnabled(enabled)
+        self.combo_mouse_mode.setEnabled(enabled)
+        self.spin_mouse_speed.setEnabled(enabled)
+        self.combo_mouse_stop.setEnabled(enabled)
+        self.combo_mouse_hotkey.setEnabled(enabled)
+        self.slider_smoothing.setEnabled(enabled)
         self.edit_udp_host.setEnabled(enabled)
         self.spin_udp_port.setEnabled(enabled)
         if enabled:

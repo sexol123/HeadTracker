@@ -241,6 +241,9 @@ class FreeTrackOutput:
             if self._mutex and mutex_acquired:
                 kernel32.ReleaseMutex(self._mutex)
 
+    def frame_id(self) -> int:
+        return self._data_id
+
     def stop(self):
         log.info("Stopping FreeTrack output...")
         self._running = False

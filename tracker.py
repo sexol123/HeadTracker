@@ -62,7 +62,12 @@ MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "face_landmarker.
 
 
 class HeadTracker:
-    def __init__(self, face_hold_time: float = 1.0, confidence_threshold: float = 0.3):
+    def __init__(
+        self,
+        face_hold_time: float = 1.0,
+        confidence_threshold: float = 0.3,
+        smoothing: float = 0.0,
+    ):
         log.info("Initializing HeadTracker...")
         if not os.path.isfile(MODEL_PATH):
             raise FileNotFoundError(
@@ -87,6 +92,8 @@ class HeadTracker:
         self._face_hold_time: float = face_hold_time
         self._confidence_threshold: float = confidence_threshold
         self._last_landmarks = None
+        self._smoothing: float = max(0.0, min(1.0, smoothing))
+        self._smooth_state: dict | None = None
 
         # Smooth confidence: fast rise, slow fall
         self._confidence_smoother = AdaptiveExponentialFilter(
@@ -101,6 +108,35 @@ class HeadTracker:
 
     def get_last_landmarks(self):
         return self._last_landmarks
+
+    def set_smoothing(self, smoothing: float):
+        self._smoothing = max(0.0, min(1.0, smoothing))
+        if self._smoothing <= 0.0:
+            self._smooth_state = None
+
+    def _apply_smoothing(self, pose: Pose) -> Pose:
+        if self._smoothing <= 0.0:
+            self._smooth_state = None
+            return pose
+        alpha = 1.0 - self._smoothing
+        state = self._smooth_state
+        if state is None:
+            self._smooth_state = {
+                "yaw": pose.yaw, "pitch": pose.pitch, "roll": pose.roll,
+                "x": pose.x, "y": pose.y, "z": pose.z,
+            }
+            return pose
+        vals = {
+            "yaw": pose.yaw, "pitch": pose.pitch, "roll": pose.roll,
+            "x": pose.x, "y": pose.y, "z": pose.z,
+        }
+        for k, v in vals.items():
+            state[k] = state[k] + (v - state[k]) * alpha
+        return Pose(
+            yaw=state["yaw"], pitch=state["pitch"], roll=state["roll"],
+            x=state["x"], y=state["y"], z=state["z"],
+            confidence=pose.confidence, timestamp=pose.timestamp,
+        )
 
     def process_frame(
         self,
@@ -131,6 +167,7 @@ class HeadTracker:
         if not result.face_landmarks:
             self._last_landmarks = None
             self._raw_confidence = 0.0
+            self._smooth_state = None
             # Check hold time before fully losing
             elapsed = time.perf_counter() - self._face_lost_time
             if elapsed < self._face_hold_time:
@@ -210,6 +247,8 @@ class HeadTracker:
             timestamp=timestamp,
         )
 
+        raw_pose = self._apply_smoothing(raw_pose)
+
         self._last_valid_pose = raw_pose
 
         # Blend with last valid pose based on confidence
@@ -254,18 +293,23 @@ class HeadTracker:
         singular = sy < 1e-6
 
         if not singular:
-            pitch = math.atan2(-R[2, 0], sy)
-            yaw = math.atan2(R[1, 0], R[0, 0])
-            roll = math.atan2(R[2, 1], R[2, 2])
+            # ZYX decomposition: angles about the model's Z (in-plane), Y (vertical),
+            # X (horizontal) axes. For the face model used here (+Y up, +Z toward camera)
+            # these correspond to: Z = head tilt (roll), Y = horizontal turn (yaw),
+            # X = vertical nod (pitch). Signs flipped to the sim convention:
+            # positive yaw = turn right, positive pitch = look up, positive roll = tilt right.
+            turn = -math.atan2(-R[2, 0], sy)
+            nod = -math.atan2(R[2, 1], R[2, 2])
+            tilt = -math.atan2(R[1, 0], R[0, 0])
         else:
-            pitch = math.atan2(-R[2, 0], sy)
-            yaw = math.atan2(-R[1, 2], R[1, 1])
-            roll = 0.0
+            turn = -math.atan2(-R[2, 0], sy)
+            nod = 0.0
+            tilt = -math.atan2(-R[1, 2], R[1, 1])
 
         return {
-            "yaw": math.degrees(yaw),
-            "pitch": math.degrees(pitch),
-            "roll": math.degrees(roll),
+            "yaw": math.degrees(turn),
+            "pitch": math.degrees(nod),
+            "roll": math.degrees(tilt),
         }
 
     def close(self):

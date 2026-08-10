@@ -1,6 +1,7 @@
 import sys
 import os
 import logging
+from collections import deque
 from datetime import datetime
 from pathlib import Path
 
@@ -16,7 +17,7 @@ if sys.platform == "win32":
     except Exception:
         pass
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QObject, Signal
 from PySide6.QtWidgets import QApplication, QSplashScreen
 from PySide6.QtGui import QPixmap, QPainter, QColor, QFont, QIcon
 
@@ -29,19 +30,40 @@ LOGS_DIR.mkdir(exist_ok=True)
 ICON_PATH = Path(__file__).parent / "HeadTrackerIcon.png"
 
 
+class LogBridge(QObject):
+    """Marshals log records from any thread to the GUI thread via a queued signal."""
+
+    message = Signal(str)
+
+
 class UILogHandler(logging.Handler):
     def __init__(self):
         super().__init__()
-        self._window = None
+        self._emitter = None
+        self._buffer: deque[str] = deque(maxlen=200)
 
-    def set_window(self, window):
-        self._window = window
+    def set_emitter(self, emitter):
+        self._emitter = emitter
+
+    def flush_buffer(self):
+        while self._buffer:
+            if self._emitter is None:
+                break
+            try:
+                self._emitter(self._buffer.popleft())
+            except Exception:
+                pass
 
     def emit(self, record):
-        if self._window is None:
+        try:
+            msg = self.format(record)
+        except Exception:
+            return
+        if self._emitter is None:
+            self._buffer.append(msg)
             return
         try:
-            self._window.append_log(self.format(record))
+            self._emitter(msg)
         except Exception:
             pass
 
@@ -50,7 +72,8 @@ def setup_logging(debug: bool = False):
     fmt = logging.Formatter("%(asctime)s [%(name)s] %(levelname)s: %(message)s", datefmt="%Y-%m-%d %H:%M:%S")
 
     root_logger = logging.getLogger()
-    level = logging.DEBUG if debug else logging.WARNING
+    # INFO in normal mode so the Log tab shows regular activity, DEBUG with -debug
+    level = logging.DEBUG if debug else logging.INFO
     root_logger.setLevel(level)
 
     if debug:
@@ -68,6 +91,7 @@ def setup_logging(debug: bool = False):
         root_logger.addHandler(console)
 
     ui_handler = UILogHandler()
+    ui_handler.setLevel(logging.INFO)
     ui_handler.setFormatter(fmt)
     root_logger.addHandler(ui_handler)
 
@@ -84,6 +108,7 @@ def setup_logging(debug: bool = False):
 def main():
     debug = "-debug" in sys.argv or "-logging" in sys.argv
     ui_handler = setup_logging(debug=debug)
+    log_bridge = LogBridge()
     log = logging.getLogger("main")
 
     log.info("=== HeadTracker starting ===")
@@ -168,7 +193,9 @@ def main():
 
     try:
         window = MainWindow(profile)
-        ui_handler.set_window(window)
+        log_bridge.message.connect(window.append_log)
+        ui_handler.set_emitter(log_bridge.message.emit)
+        ui_handler.flush_buffer()
         window.show()
         _splash_timer.stop()
         splash.finish(window)

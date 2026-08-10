@@ -6,10 +6,18 @@ from camera import Camera, WebSocketCamera, CameraFrame
 from tracker import HeadTracker, Pose
 from freetrack import FreeTrackOutput
 from udp_output import UdpOutput
+from mouse_output import MouseOutput
 from config import Profile, AppSettings
 from i18n import t
 
+try:
+    from pynput.keyboard import Listener as KeyboardListener, Key, KeyCode
+except ImportError:
+    KeyboardListener = Key = KeyCode = None
+
 log = logging.getLogger("worker")
+
+TOGGLE_DEBOUNCE = 0.3
 
 
 class TrackingWorker(QThread):
@@ -18,6 +26,7 @@ class TrackingWorker(QThread):
     frame_ready = Signal(object)
     pose_ready = Signal(object)
     confidence_ready = Signal(float)
+    output_log = Signal(str)
     error_occurred = Signal(str)
     stopped = Signal()
 
@@ -29,6 +38,7 @@ class TrackingWorker(QThread):
         self._output = None
         self._profile: Profile | None = None
         self._settings: AppSettings | None = None
+        self._key_listener = None
         self._mutex = QMutex()
         self._last_raw_pose = Pose()
         self._last_frame: CameraFrame | None = None
@@ -47,6 +57,8 @@ class TrackingWorker(QThread):
     def update_profile(self, profile: Profile):
         with QMutexLocker(self._mutex):
             self._profile = profile
+        if isinstance(self._output, MouseOutput):
+            self._output.update_profile(profile)
 
     def run(self):
         log.info("Worker thread starting background initialization...")
@@ -103,6 +115,7 @@ class TrackingWorker(QThread):
             self._tracker = HeadTracker(
                 face_hold_time=1.0,
                 confidence_threshold=0.3,
+                smoothing=settings.pose_smoothing,
             )
         except Exception as e:
             log.error(f"Tracker init exception: {e}", exc_info=True)
@@ -120,6 +133,10 @@ class TrackingWorker(QThread):
         try:
             if settings.output_protocol == "freetrack":
                 self._output = FreeTrackOutput()
+            elif settings.output_protocol == "mouse":
+                self._output = MouseOutput(mode=settings.mouse_mode, speed=settings.mouse_speed)
+                self._output.update_profile(profile)
+                self._start_mouse_hotkey(settings)
             else:
                 self._output = UdpOutput(host=settings.udp_host, port=settings.udp_port)
 
@@ -144,6 +161,7 @@ class TrackingWorker(QThread):
         log.info(f"Worker thread initialized — entering tracking loop for {profile.name}")
 
         frame_count = 0
+        proto_tag = "FT" if settings.output_protocol == "freetrack" else ("Mouse" if settings.output_protocol == "mouse" else "UDP")
         while self._running:
             t0 = time.perf_counter()
 
@@ -173,11 +191,39 @@ class TrackingWorker(QThread):
                     f"x={mapped.x:+.1f} y={mapped.y:+.1f} z={mapped.z:+.1f}"
                 )
 
+            sent = False
             if self._output and mapped.confidence >= 0.3:
-                self._output.send_pose(
-                    yaw=mapped.yaw, pitch=mapped.pitch, roll=mapped.roll,
-                    x=mapped.x, y=mapped.y, z=mapped.z,
-                )
+                if isinstance(self._output, MouseOutput):
+                    self._output.send_pose(
+                        yaw=pose.yaw, pitch=pose.pitch, roll=pose.roll,
+                        x=pose.x, y=pose.y, z=pose.z,
+                    )
+                else:
+                    self._output.send_pose(
+                        yaw=mapped.yaw, pitch=mapped.pitch, roll=mapped.roll,
+                        x=mapped.x, y=mapped.y, z=mapped.z,
+                    )
+                sent = True
+
+            if frame_count % 60 == 0:
+                if not sent:
+                    line = f"{proto_tag} » no send: conf={mapped.confidence:.2f} (< 0.3)"
+                elif isinstance(self._output, MouseOutput) and not self._output.is_active():
+                    line = f"Mouse » paused ({self._settings.mouse_hotkey if self._settings else '?'})"
+                elif isinstance(self._output, MouseOutput):
+                    line = (
+                        f"Mouse » yaw={pose.yaw:+.1f}° pitch={pose.pitch:+.1f}° "
+                        f"conf={mapped.confidence:.2f}"
+                    )
+                else:
+                    fid = getattr(self._output, "frame_id", None)
+                    fid_txt = f" DataID={fid()}" if fid else ""
+                    line = (
+                        f"{proto_tag} » Yaw={mapped.yaw:+.1f}° Pitch={mapped.pitch:+.1f}° "
+                        f"Roll={mapped.roll:+.1f}° X={mapped.x:+.1f} Y={mapped.y:+.1f} "
+                        f"Z={mapped.z:+.1f} conf={mapped.confidence:.2f}{fid_txt}"
+                    )
+                self.output_log.emit(line)
 
             self.confidence_ready.emit(mapped.confidence)
             self.pose_ready.emit(mapped)
@@ -241,7 +287,70 @@ class TrackingWorker(QThread):
             timestamp=pose.timestamp,
         )
 
+    @staticmethod
+    def _parse_hotkey(name: str):
+        name = (name or "").strip().lower()
+        if not name or KeyboardListener is None:
+            return None
+        attr = {
+            "f1": "f1", "f2": "f2", "f3": "f3", "f4": "f4", "f5": "f5", "f6": "f6",
+            "f7": "f7", "f8": "f8", "f9": "f9", "f10": "f10", "f11": "f11", "f12": "f12",
+            "space": "space", "insert": "insert", "delete": "delete",
+        }.get(name)
+        if attr:
+            return getattr(Key, attr, None)
+        if len(name) == 1 and name.isprintable():
+            return KeyCode.from_char(name)
+        return None
+
+    def _start_mouse_hotkey(self, settings: AppSettings):
+        if KeyboardListener is None:
+            log.warning("pynput keyboard unavailable - mouse hotkey disabled")
+            return
+        key = self._parse_hotkey(settings.mouse_hotkey)
+        if key is None:
+            log.warning(f"Unknown mouse hotkey: {settings.mouse_hotkey!r}")
+            return
+        mode = settings.mouse_stop_mode
+        output = self._output
+        emit = self.output_log
+        key_name = settings.mouse_hotkey
+        last_toggle = [0.0]
+
+        def on_press(k):
+            if k != key:
+                return
+            if mode == "toggle":
+                now = time.perf_counter()
+                if now - last_toggle[0] >= TOGGLE_DEBOUNCE:
+                    last_toggle[0] = now
+                    output.set_active(not output.is_active())
+                    emit.emit(f"Mouse » {'on' if output.is_active() else 'off'} ({key_name})")
+            elif not output.is_active():
+                output.set_active(True)
+                emit.emit(f"Mouse » on ({key_name})")
+
+        def on_release(k):
+            if k == key and mode != "toggle" and output.is_active():
+                output.set_active(False)
+                emit.emit(f"Mouse » off ({key_name})")
+
+        try:
+            self._key_listener = KeyboardListener(on_press=on_press, on_release=on_release)
+            self._key_listener.start()
+            log.info(f"Mouse hotkey active: {key_name} (mode={mode})")
+        except Exception as e:
+            log.error(f"Failed to start keyboard listener: {e}", exc_info=True)
+            self._key_listener = None
+
     def _cleanup(self):
+        if self._key_listener is not None:
+            try:
+                self._key_listener.stop()
+                self._key_listener.join(timeout=1.0)
+            except Exception as e:
+                log.warning(f"Error stopping keyboard listener: {e}")
+            self._key_listener = None
         if self._output:
             try:
                 self._output.stop()
