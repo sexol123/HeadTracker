@@ -1,3 +1,4 @@
+import math
 from PySide6.QtCore import Qt, QPointF, QRectF, QTimer
 from PySide6.QtGui import QPainter, QColor, QPen, QFont, QBrush
 from PySide6.QtWidgets import (
@@ -19,11 +20,23 @@ BAR_COLOR = QColor("#2ecc71")
 GAUGE_BG = QColor("#10101f")
 
 
-def axis_curve(x, sens, dz, inverted):
+def axis_curve(x, sens, dz, inverted, curve=None):
+    """Piecewise response curve: (0,0) -> curve[0],curve[1] -> slope=sens.
+    curve=None keeps the legacy linear mapping y = sens*x."""
     if abs(x) < dz:
         return 0.0
     s = -1.0 if inverted else 1.0
-    return s * x * sens
+    v = s * x
+    a = abs(v)
+    if curve and len(curve) >= 2 and float(curve[0]) > 0:
+        x2, y2 = float(curve[0]), max(0.0, float(curve[1]))
+        if a <= x2:
+            out = y2 / x2 * v
+        else:
+            out = math.copysign(y2 + sens * (a - x2), v)
+    else:
+        out = v * sens
+    return out
 
 
 class AxisPlot(QWidget):
@@ -34,6 +47,7 @@ class AxisPlot(QWidget):
         self.sens = 6.0
         self.dz = 2.0
         self.inverted = False
+        self.curve = None
         self.live_raw = None
         self.live_mapped = None
         self.on_param_changed = None
@@ -56,11 +70,16 @@ class AxisPlot(QWidget):
     def mousePressEvent(self, event):
         pos = event.position()
         self._drag = None
-        c = self._px(0, 0)
-        for sign in (1.0, -1.0):
-            h = self._px(sign * self.dz, 0)
-            if (pos - QPointF(h.x(), h.y())).manhattanLength() <= 12:
-                self._drag = ("dz", sign)
+        if self.curve is not None and len(self.curve) >= 2:
+            h2 = self._px(self.curve[0], self.curve[1])
+            if (pos - QPointF(h2.x(), h2.y())).manhattanLength() <= 12:
+                self._drag = ("curve",)
+        if self._drag is None:
+            c = self._px(0, 0)
+            for sign in (1.0, -1.0):
+                h = self._px(sign * self.dz, 0)
+                if (pos - QPointF(h.x(), h.y())).manhattanLength() <= 12:
+                    self._drag = ("dz", sign)
         if self._drag is None:
             x, y = self._inv(pos.x(), pos.y())
             if abs(x) > self.dz + 0.5:
@@ -75,6 +94,11 @@ class AxisPlot(QWidget):
         if self._drag[0] == "dz":
             dz = round(max(0.0, min(min(30.0, self.span), abs(x))) * 2) / 2
             self._apply(dz=dz)
+        elif self._drag[0] == "curve":
+            x2 = round(max(0.5, min(self.span, abs(x))) * 2) / 2
+            max_y = max(1.0, self._y_span * 0.95)
+            y2 = round(max(0.0, min(max_y, abs(y))) * 2) / 2
+            self._apply(curve=[x2, y2])
         else:
             if abs(x) < 0.5:
                 return
@@ -90,13 +114,15 @@ class AxisPlot(QWidget):
             self.update()
         event.accept()
 
-    def _apply(self, sens=None, dz=None):
+    def _apply(self, sens=None, dz=None, curve=None):
         if sens is not None:
             self.sens = sens
         if dz is not None:
             self.dz = dz
+        if curve is not None:
+            self.curve = list(curve)
         if self.on_param_changed is not None:
-            self.on_param_changed(self.name, self.sens, self.dz)
+            self.on_param_changed(self.name, self.sens, self.dz, self.curve)
 
     def paintEvent(self, event):
         p = QPainter(self)
@@ -127,7 +153,7 @@ class AxisPlot(QWidget):
         p.setPen(pen)
         prev = None
         for xi in range(-int(self.span), int(self.span) + 1):
-            yi = axis_curve(xi, self.sens, self.dz, self.inverted)
+            yi = axis_curve(xi, self.sens, self.dz, self.inverted, self.curve)
             pt = self._px(xi, yi)
             if prev is not None:
                 p.drawLine(prev, pt)
@@ -138,6 +164,9 @@ class AxisPlot(QWidget):
         for sign in (1.0, -1.0):
             h = self._px(sign * self.dz, 0)
             p.drawEllipse(QRectF(h.x() - 4, h.y() - 4, 8, 8))
+        if self.curve is not None and len(self.curve) >= 2:
+            h2 = self._px(self.curve[0], self.curve[1])
+            p.drawEllipse(QRectF(h2.x() - 4, h2.y() - 4, 8, 8))
 
         if self.live_raw is not None:
             l = self._px(self.live_raw, self.live_mapped)
@@ -146,7 +175,10 @@ class AxisPlot(QWidget):
             p.drawEllipse(QRectF(l.x() - 4, l.y() - 4, 8, 8))
 
         p.setPen(QPen(QColor("#cccccc")))
-        p.drawText(8, 12, f"{self.name.upper()}  dz {self.dz:.1f}  sens {self.sens:.1f}")
+        hdr = f"{self.name.upper()}  dz {self.dz:.1f}  sens {self.sens:.1f}"
+        if self.curve is not None and len(self.curve) >= 2:
+            hdr += f"  curve {self.curve[0]:.1f}/{self.curve[1]:.1f}"
+        p.drawText(8, 12, hdr)
         p.end()
 
 
@@ -270,6 +302,7 @@ class AxesHelperDialog(QDialog):
             ax = profile.axes.get(name)
             if ax is not None:
                 plot.sens, plot.dz, plot.inverted = ax.sensitivity, ax.deadzone, ax.inverted
+                plot.curve = ax.curve
                 plot._refit()
             plot.on_param_changed = self._apply_plot
             plots_grid.addWidget(plot, i // 3, i % 3)
@@ -309,13 +342,14 @@ class AxesHelperDialog(QDialog):
         self._timer.timeout.connect(self._refresh_live)
         self._timer.start(33)
 
-    def _apply_plot(self, name, sens, dz):
+    def _apply_plot(self, name, sens, dz, curve=None):
         plot = self._plots[name]
         plot.sens = sens
         plot.dz = dz
+        plot.curve = curve
         plot.update()
         if self.on_axis_applied is not None:
-            self.on_axis_applied(name, sens, dz)
+            self.on_axis_applied(name, sens, dz, curve)
 
     def _refresh_live(self):
         tracking = self.worker.isRunning()

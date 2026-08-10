@@ -16,6 +16,7 @@ class AxisConfig:
     sensitivity: float = 6.0
     deadzone: float = 2.0
     inverted: bool = False
+    curve: list[float] | None = None
 
 
 @dataclass

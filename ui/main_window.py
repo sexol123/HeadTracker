@@ -962,12 +962,19 @@ class MainWindow(QMainWindow):
         from ui.axes_helper_dialog import AxesHelperDialog
         dlg = AxesHelperDialog(self.profile, self.worker, parent=self)
 
-        def apply_axis(name, sens, dz):
+        def apply_axis(name, sens, dz, curve=None):
             w = self._axis_widgets.get(name)
             if w is None:
                 return
+            ax = self.profile.axes.get(name)
+            if ax is not None:
+                if curve and len(curve) >= 2:
+                    ax.curve = [round(float(curve[0]), 1), round(float(curve[1]), 1)]
+                else:
+                    ax.curve = None
             w["sensitivity"].setValue(round(sens, 1))
             w["deadzone"].setValue(round(dz, 1))
+            self._on_axis_changed(name)
 
         dlg.on_axis_applied = apply_axis
         dlg.exec()

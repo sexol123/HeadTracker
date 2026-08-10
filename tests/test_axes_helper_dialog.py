@@ -31,7 +31,7 @@ worker = FakeWorker()
 
 applied = []
 dlg = AxesHelperDialog(prof, worker)
-dlg.on_axis_applied = lambda n, s, d: applied.append((n, s, d))
+dlg.on_axis_applied = lambda n, s, d, c=None: applied.append((n, s, d))
 
 p_yaw = dlg._plots["yaw"]
 assert abs(p_yaw.sens - 6.0) < 0.01 and abs(p_yaw.dz - 2.0) < 0.01, (p_yaw.sens, p_yaw.dz)

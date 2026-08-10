@@ -26,6 +26,22 @@ RECONNECT_WINDOW = 60.0      # sliding window (seconds)
 RECONNECT_INTERVAL = 3.0     # minimum time between restart attempts
 
 
+def _apply_curve(v, sens, curve):
+    """Piecewise response curve shared with ui.axes_helper_dialog.axis_curve:
+    (0,0) -> (x2,y2) -> slope=sens. curve=None keeps linear mapping."""
+    if not curve or len(curve) < 2 or float(curve[0]) <= 0:
+        return v * sens
+    x2 = float(curve[0])
+    y2 = max(0.0, float(curve[1]))
+    sign = 1.0 if v >= 0 else -1.0
+    a = abs(v)
+    if a <= x2:
+        out = y2 / x2 * a
+    else:
+        out = y2 + sens * (a - x2)
+    return sign * out
+
+
 class TrackingWorker(QThread):
     connecting = Signal()
     started_signal = Signal()
@@ -394,7 +410,7 @@ class TrackingWorker(QThread):
                 v = -v
             if abs(v) < cfg.deadzone:
                 v = 0.0
-            v *= cfg.sensitivity
+            v = _apply_curve(v, cfg.sensitivity, cfg.curve)
             return v
 
         return Pose(
