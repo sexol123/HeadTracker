@@ -390,8 +390,9 @@ class MainWindow(QMainWindow):
         inner = QWidget(); layout = QVBoxLayout(inner)
 
         self._smoothing_group = QGroupBox(t("smoothing"))
-        self._smoothing_group.setToolTip(t("smoothing_tip"))
-        smoothing_layout = QHBoxLayout(self._smoothing_group)
+        self._smoothing_group.setToolTip(t("smoothing_tip") + "\n" + t("smoothing_deadzone_tip"))
+        smoothing_outer = QVBoxLayout(self._smoothing_group)
+        smoothing_layout = QHBoxLayout()
         self.slider_smoothing = QSlider(Qt.Horizontal)
         self.slider_smoothing.setRange(0, 100)
         self.slider_smoothing.setValue(50)
@@ -401,6 +402,12 @@ class MainWindow(QMainWindow):
         self.lbl_smoothing_val.setFixedWidth(40)
         smoothing_layout.addWidget(self.slider_smoothing, 1)
         smoothing_layout.addWidget(self.lbl_smoothing_val)
+        smoothing_outer.addLayout(smoothing_layout)
+        self.lbl_smoothing_warn = QLabel(t("smoothing_deadzone_warn"))
+        self.lbl_smoothing_warn.setStyleSheet("color: #e67e22;")
+        self.lbl_smoothing_warn.setWordWrap(True)
+        self.lbl_smoothing_warn.setVisible(False)
+        smoothing_outer.addWidget(self.lbl_smoothing_warn)
         layout.addWidget(self._smoothing_group)
 
         profile_layout = QHBoxLayout()
@@ -664,7 +671,8 @@ class MainWindow(QMainWindow):
         self._lbl_status_title.setText(t("tab_status") + ":")
         # Axes tab
         self._smoothing_group.setTitle(t("smoothing"))
-        self._smoothing_group.setToolTip(t("smoothing_tip"))
+        self._smoothing_group.setToolTip(t("smoothing_tip") + "\n" + t("smoothing_deadzone_tip"))
+        self.lbl_smoothing_warn.setText(t("smoothing_deadzone_warn"))
         # Camera tab
         self._lbl_source.setText(t("source"))
         self._lbl_camera.setText(t("camera"))
@@ -753,6 +761,7 @@ class MainWindow(QMainWindow):
                     widgets["deadzone"].setValue(ax.deadzone)
                     widgets["inverted"].setChecked(ax.inverted)
             self.lbl_profile.setText(self.profile.name)
+            self._update_smoothing_warning()
             log.info(f"Profile loaded: {self.profile.name}")
             if self.tracking_active:
                 self.worker.update_profile(self.profile)
@@ -820,6 +829,7 @@ class MainWindow(QMainWindow):
         self.slider_smoothing.setValue(int(s.pose_smoothing * 100))
         self.edit_udp_host.setText(s.udp_host)
         self.spin_udp_port.setValue(s.udp_port)
+        self._update_smoothing_warning()
 
     def _on_cam_type_changed(self, index):
         is_ip = index == 1
@@ -849,6 +859,13 @@ class MainWindow(QMainWindow):
 
     def _on_smoothing_changed(self, value):
         self.lbl_smoothing_val.setText(f"{value}%")
+        self._update_smoothing_warning()
+
+    def _update_smoothing_warning(self):
+        warn = self.slider_smoothing.value() > 60 and any(
+            ax.enabled and ax.deadzone > 0.0 for ax in self.profile.axes.values()
+        )
+        self.lbl_smoothing_warn.setVisible(warn)
 
     def _on_live_setting_changed(self, *_):
         if not self.tracking_active:
@@ -932,6 +949,7 @@ class MainWindow(QMainWindow):
         ax.sensitivity = w["sensitivity"].value()
         ax.deadzone = w["deadzone"].value()
         ax.inverted = w["inverted"].isChecked()
+        self._update_smoothing_warning()
         if self.tracking_active:
             self.worker.update_profile(self.profile)
         self._profile_autosave_timer.start()

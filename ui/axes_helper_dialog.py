@@ -275,7 +275,7 @@ class AxesHelperDialog(QDialog):
             plots_grid.addWidget(plot, i // 3, i % 3)
             self._plots[name] = plot
         curves_group = QGroupBox(t("axes_setup_curves"))
-        curves_group.setToolTip(t("axes_setup_hint"))
+        curves_group.setToolTip(t("axes_setup_hint") + "\n" + t("smoothing_deadzone_tip"))
         curves_lay = QVBoxLayout(curves_group)
         curves_lay.addLayout(plots_grid)
 

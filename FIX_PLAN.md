@@ -99,18 +99,18 @@
 
 ---
 
-## P3. Конфликт Smoothing ↔ Deadzone
+## P3. Конфликт Smoothing ↔ Deadzone ✅
 
 **Суть:** deadzone обнуляет малые движения, smoothing их «размазывает» — при больших значениях обоих движение вялое и непредсказуемое. В UI нет предупреждения.
 
-**Сложность:** низкая. **Файлы:** `ui/main_window.py`, `i18n.py`.
+**Статус:** ✅ сделано.
 
-Шаги:
-1. Предупреждение при Smoothing > 60% и deadzone > 0: жёлтая подпись «High smoothing + deadzone: response may feel slow» (ключ i18n × 4 языка).
-2. Tooltip в Axes-хелпере: пояснение взаимного влияния.
-3. Опционально: кнопка «Recommend» — предлагает deadzone ≈ 0 при high smoothing.
-
-**Проверка:** визуально при комбинациях значений; ключи переведены во всех 4 языках.
+Сделано:
+1. `ui/main_window.py`: жёлтая метка `lbl_smoothing_warn` в группе Smoothing — видна при smoothing > 60% и любом включённом deadzone > 0; обновляется на изменение слайдера, любой оси и профиля; цвет `#e67e22`.
+2. Тултип группы Smoothing и группы кривых в Axes-хелпере (`axes_helper_dialog.py`) дополнен строкой `smoothing_deadzone_tip` о взаимном влиянии.
+3. `i18n.py`: ключи `smoothing_deadzone_warn` и `smoothing_deadzone_tip` × 4 языка.
+4. Тест `tests/test_smoothing_warning.py` — 7 блоков: скрыто по умолчанию, показано при 70%+deadzone, скрыто при всех нулевых deadzone, порог 60%, реакция на изменение спинбоксов, игнор отключённых осей, тултипы содержат пояснение.
+5. `run_tests.bat` → 18/18 PASS.
 
 ---
 
