@@ -214,6 +214,23 @@ def test_healthy_camera_not_restarted():
     print("PASS: Healthy camera is never restarted")
 
 
+def test_ui_status_shows_stall_and_recovery():
+    from ui.main_window import MainWindow
+    from config import Profile
+    from i18n import t
+
+    win = MainWindow(Profile())
+    win._on_worker_event_marker("reconnect")
+    assert win.lbl_status.text() == t("status_camera_stall")
+    assert "#e67e22" in win.lbl_status.styleSheet()
+    win._on_worker_event_marker("reconnected")
+    assert win.lbl_status.text() == t("status_running")
+    assert win.lbl_status.styleSheet() == ""
+    win._stop_tracking()
+    assert win.lbl_status.text() == t("status_stopped")
+    print("PASS: UI status label reflects stall -> reconnected -> stopped")
+
+
 if __name__ == "__main__":
     test_camera_stall_flag()
     test_camera_healthy_frame_clears_flag()
@@ -223,4 +240,5 @@ if __name__ == "__main__":
     test_restart_throttle_and_limit()
     test_healthy_frame_resets_restart_budget()
     test_healthy_camera_not_restarted()
+    test_ui_status_shows_stall_and_recovery()
     print("ALL CAMERA STALL TESTS PASSED")

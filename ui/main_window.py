@@ -159,7 +159,7 @@ class MainWindow(QMainWindow):
             self._toggle_window_visibility()
 
     def _init_ui(self):
-        self.setWindowTitle(t("window_title"))
+        self._update_window_title()
         self.setMinimumSize(960, 640)
         central = QWidget()
         self.setCentralWidget(central)
@@ -657,8 +657,14 @@ class MainWindow(QMainWindow):
         combo.setCurrentIndex(idx if idx != -1 else 0)
         combo.blockSignals(False)
 
+    def _update_window_title(self):
+        base = t("window_title")
+        if getattr(self, "profile", None) is not None:
+            base = f"{base} — {self.profile.name}"
+        self.setWindowTitle(base)
+
     def _refresh_ui_text(self):
-        self.setWindowTitle(t("window_title"))
+        self._update_window_title()
         self.preview_label.setText(t("camera_preview"))
         self.btn_start.setText(t("btn_stop") if self.tracking_active else t("btn_start"))
         self.btn_new.setText(t("btn_new"))
@@ -783,6 +789,7 @@ class MainWindow(QMainWindow):
                     widgets["inverted"].setChecked(ax.inverted)
             self.lbl_profile.setText(self.profile.name)
             self._update_smoothing_warning()
+            self._update_window_title()
             log.info(f"Profile loaded: {self.profile.name}")
             if self.tracking_active:
                 self.worker.update_profile(self.profile)
@@ -1181,6 +1188,12 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def _on_worker_event_marker(self, code):
         self.stats_graph.add_marker(code)
+        if code == "reconnect":
+            self.lbl_status.setText(t("status_camera_stall"))
+            self.lbl_status.setStyleSheet("color: #e67e22; font-weight: bold;")
+        elif code == "reconnected":
+            self.lbl_status.setText(t("status_running"))
+            self.lbl_status.setStyleSheet("")
 
     @Slot(object)
     def _on_worker_pose(self, pose):
@@ -1225,6 +1238,7 @@ class MainWindow(QMainWindow):
         self.btn_start.setText(t("btn_start"))
         self.btn_start.setStyleSheet("QPushButton { background-color: #2ecc71; color: white; font-weight: bold; } QPushButton:hover { background-color: #27ae60; }")
         self.lbl_status.setText(t("status_stopped"))
+        self.lbl_status.setStyleSheet("")
         self.lbl_ft_status.setText(t("status_not_running"))
         self.lbl_yaw.setText("0.00")
         self.lbl_pitch.setText("0.00")
@@ -1302,6 +1316,8 @@ class MainWindow(QMainWindow):
         cv2.rectangle(frame, (bx, by), (bx + bar_w, by + bar_h), (50, 50, 50), -1)
         cv2.rectangle(frame, (bx, by), (bx + int(bar_w * conf), by + bar_h), (0, 255, 0) if conf > 0.5 else (0, 0, 255), -1)
         cv2.putText(frame, f"{conf:.0%}", (bx + bar_w + 5, by + bar_h - 1), cv2.FONT_HERSHEY_SIMPLEX, 0.4, (200, 200, 200), 1)
+        fps = getattr(self, "display_fps", 0.0)
+        cv2.putText(frame, f"{fps:.0f} FPS", (10, h - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0, 255, 255), 1, cv2.LINE_AA)
         return frame
 
     @Slot()
@@ -1337,6 +1353,7 @@ class MainWindow(QMainWindow):
         self.btn_start.setText(t("btn_start"))
         self.btn_start.setStyleSheet("QPushButton { background-color: #2ecc71; color: white; font-weight: bold; } QPushButton:hover { background-color: #27ae60; }")
         self.lbl_status.setText(t("status_stopped"))
+        self.lbl_status.setStyleSheet("")
         self.lbl_ft_status.setText(t("status_not_running"))
         self.preview_label.clear()
         self.preview_label.setText(t("camera_preview"))
