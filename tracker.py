@@ -45,6 +45,7 @@ class HeadTracker:
         confidence_threshold: float = 0.3,
         smoothing: float = 0.0,
         calibration: CameraCalibration | None = None,
+        num_faces: int = 1,
     ):
         log.info("Initializing HeadTracker...")
         if not os.path.isfile(MODEL_PATH):
@@ -56,7 +57,7 @@ class HeadTracker:
             options = FaceLandmarkerOptions(
                 base_options=BaseOptions(model_asset_path=MODEL_PATH),
                 running_mode=mp.tasks.vision.RunningMode.VIDEO,
-                num_faces=1,
+                num_faces=max(1, int(num_faces)),
                 min_face_detection_confidence=0.5,
                 min_tracking_confidence=0.5,
             )
@@ -81,12 +82,30 @@ class HeadTracker:
         )
         self._raw_confidence: float = 0.0
 
+        # Multi-face selection state
+        self._face_index: int = 0
+        self._selected_index: int = 0
+        self._selected_center: tuple[float, float] | None = None
+        self._face_boxes: list[tuple[float, float, float, float]] = []
+
         # Pose blending state
         self._blend_pose = Pose()
         self._blend_alpha: float = 0.0
 
     def get_last_landmarks(self):
         return self._last_landmarks
+
+    def set_face_index(self, index: int):
+        """Select which detected face to track (0-based, clamped)."""
+        self._face_index = max(0, int(index))
+
+    def get_selected_face_index(self) -> int:
+        """Index of the face actually used in the last processed frame."""
+        return self._selected_index
+
+    def get_face_boxes(self) -> list[tuple[float, float, float, float]]:
+        """Normalized (cx, cy, half_w, half_h) boxes of all detected faces."""
+        return list(self._face_boxes)
 
     def set_smoothing(self, smoothing: float):
         self._smoothing = max(0.0, min(1.0, smoothing))
@@ -150,6 +169,8 @@ class HeadTracker:
             self._last_landmarks = None
             self._raw_confidence = 0.0
             self._smooth_state = None
+            self._face_boxes = []
+            self._selected_center = None
             # Check hold time before fully losing
             elapsed = time.perf_counter() - self._face_lost_time
             if elapsed < self._face_hold_time:
@@ -163,7 +184,35 @@ class HeadTracker:
         # Face detected — reset lost timer
         self._face_lost_time = time.perf_counter()
 
-        face_landmarks = result.face_landmarks[0]
+        # Per-face bounding boxes from landmark extents
+        boxes = []
+        for lm in result.face_landmarks:
+            xs = [p.x for p in lm]
+            ys = [p.y for p in lm]
+            boxes.append((
+                (min(xs) + max(xs)) / 2.0,
+                (min(ys) + max(ys)) / 2.0,
+                (max(xs) - min(xs)) / 2.0,
+                (max(ys) - min(ys)) / 2.0,
+            ))
+        self._face_boxes = boxes
+
+        # Keep the selected physical face across frames (nearest-center ID
+        # stability), fall back to the user-chosen index for fresh detections.
+        if len(boxes) > 1 and self._selected_center is not None:
+            px, py = self._selected_center
+            idx = min(
+                range(len(boxes)),
+                key=lambda i: (boxes[i][0] - px) ** 2 + (boxes[i][1] - py) ** 2,
+            )
+        else:
+            idx = self._face_index
+        if idx >= len(boxes):
+            idx = 0
+        self._selected_index = idx
+        self._selected_center = (boxes[idx][0], boxes[idx][1])
+
+        face_landmarks = result.face_landmarks[idx]
         self._last_landmarks = face_landmarks
 
         # Calculate landmark visibility for partial occlusion detection

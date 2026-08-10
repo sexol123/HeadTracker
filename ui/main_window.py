@@ -69,6 +69,7 @@ class MainWindow(QMainWindow):
         self.worker.started_signal.connect(self._on_worker_started)
         self.worker.frame_ready.connect(self._on_worker_frame)
         self.worker.pose_ready.connect(self._on_worker_pose)
+        self.worker.faces_ready.connect(self._on_worker_faces)
         self.worker.confidence_ready.connect(self._on_worker_confidence)
         self.worker.output_log.connect(self._on_protocol_log)
         self.worker.error_occurred.connect(self._on_worker_error)
@@ -179,6 +180,14 @@ class MainWindow(QMainWindow):
         self.btn_start.setStyleSheet("QPushButton { background-color: #2ecc71; color: white; font-weight: bold; } QPushButton:hover { background-color: #27ae60; }")
         self.btn_start.clicked.connect(self._on_start_stop)
         controls_layout.addWidget(self.btn_start)
+        self.lbl_face_title = QLabel(t("face_select"))
+        self.combo_face = QComboBox()
+        self.combo_face.setEnabled(False)
+        self.combo_face.setToolTip(t("face_select_tip"))
+        self.lbl_face_title.setToolTip(t("face_select_tip"))
+        self.combo_face.currentIndexChanged.connect(self._on_face_selected)
+        controls_layout.addWidget(self.lbl_face_title)
+        controls_layout.addWidget(self.combo_face, 1)
         left_layout.addLayout(controls_layout)
 
         self._pose_group = QGroupBox(t("head_pose"))
@@ -1107,6 +1116,32 @@ class MainWindow(QMainWindow):
             log.warning(f"Display update error: {e}")
 
     @Slot(object)
+    def _on_worker_faces(self, faces):
+        try:
+            selected, boxes = faces
+            self._face_boxes = list(boxes)
+            self._selected_face_idx = int(selected) if len(boxes) else 0
+            if not self.tracking_active:
+                return
+            self.combo_face.blockSignals(True)
+            if self.combo_face.count() != len(boxes):
+                self.combo_face.clear()
+                for i in range(len(boxes)):
+                    self.combo_face.addItem(str(i + 1))
+            if 0 <= self._selected_face_idx < self.combo_face.count():
+                self.combo_face.setCurrentIndex(self._selected_face_idx)
+            self.combo_face.blockSignals(False)
+            self.combo_face.setEnabled(len(boxes) > 1)
+        except Exception as e:
+            log.warning(f"Face list update error: {e}")
+
+    @Slot(int)
+    def _on_face_selected(self, index):
+        if index < 0 or not self.tracking_active:
+            return
+        self.worker.set_face_index(index)
+
+    @Slot(object)
     def _on_worker_pose(self, pose):
         self.current_pose = pose
         self.lbl_yaw.setText(f"{pose.yaw:+.2f}")
@@ -1161,6 +1196,12 @@ class MainWindow(QMainWindow):
         self.preview_label.clear()
         self.preview_label.setText(t("camera_preview"))
         self.preview_label.setVisible(True)
+        self._face_boxes = []
+        self._selected_face_idx = 0
+        self.combo_face.blockSignals(True)
+        self.combo_face.clear()
+        self.combo_face.setEnabled(False)
+        self.combo_face.blockSignals(False)
         self._set_controls_enabled(True)
         try:
             self._read_settings_from_ui()
@@ -1171,6 +1212,17 @@ class MainWindow(QMainWindow):
 
     def _draw_overlay(self, frame, pose):
         h, w = frame.shape[:2]
+        boxes = getattr(self, "_face_boxes", [])
+        selected = getattr(self, "_selected_face_idx", 0)
+        if boxes:
+            for i, (cx, cy, hw, hh) in enumerate(boxes):
+                x1 = int((cx - hw) * w)
+                y1 = int((cy - hh) * h)
+                x2 = int((cx + hw) * w)
+                y2 = int((cy + hh) * h)
+                color = (0, 255, 255) if i == selected else (255, 255, 255)
+                cv2.rectangle(frame, (x1, y1), (x2, y2), color, 2 if i == selected else 1, cv2.LINE_AA)
+                cv2.putText(frame, str(i + 1), (x1, y1 - 4), cv2.FONT_HERSHEY_SIMPLEX, 0.5, color, 1, cv2.LINE_AA)
         if self._last_landmarks is not None:
             landmarks = self._last_landmarks
             for i, j in self.FACE_MESH_TESSELATION:
@@ -1228,6 +1280,12 @@ class MainWindow(QMainWindow):
         self.lbl_status.setText(t("status_connecting"))
         self.lbl_ft_status.setText(t("status_connecting"))
         self._set_controls_enabled(False)
+        self.combo_face.blockSignals(True)
+        self.combo_face.clear()
+        self.combo_face.setEnabled(False)
+        self.combo_face.blockSignals(False)
+        self._face_boxes = []
+        self._selected_face_idx = 0
         self.worker.start_tracking(self.profile, self.app_settings)
 
     def _stop_tracking(self):
@@ -1241,6 +1299,12 @@ class MainWindow(QMainWindow):
         self.preview_label.clear()
         self.preview_label.setText(t("camera_preview"))
         self.preview_label.setVisible(True)
+        self._face_boxes = []
+        self._selected_face_idx = 0
+        self.combo_face.blockSignals(True)
+        self.combo_face.clear()
+        self.combo_face.setEnabled(False)
+        self.combo_face.blockSignals(False)
         self._set_controls_enabled(True)
         try:
             self._read_settings_from_ui()

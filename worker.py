@@ -51,6 +51,7 @@ class TrackingWorker(QThread):
     output_log = Signal(str)
     error_occurred = Signal(str)
     stopped = Signal()
+    faces_ready = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -71,6 +72,7 @@ class TrackingWorker(QThread):
         self._last_raw_pose = Pose()
         self._last_mapped_pose = Pose()
         self._last_frame: CameraFrame | None = None
+        self._face_index: int = 0
 
     def start_tracking(self, profile: Profile, settings: AppSettings):
         with QMutexLocker(self._mutex):
@@ -89,6 +91,14 @@ class TrackingWorker(QThread):
             output = self._output
         if isinstance(output, MouseOutput):
             output.update_profile(profile)
+
+    def set_face_index(self, index: int):
+        """Select which detected face to track (0-based)."""
+        with QMutexLocker(self._mutex):
+            self._face_index = max(0, int(index))
+            tracker = self._tracker
+        if tracker is not None:
+            tracker.set_face_index(self._face_index)
 
     def run(self):
         log.info("Worker thread starting background initialization...")
@@ -163,6 +173,7 @@ class TrackingWorker(QThread):
             with QMutexLocker(self._mutex):
                 self._calibration = calibration
                 self._tracker = tracker
+                tracker.set_face_index(self._face_index)
         except Exception as e:
             log.error(f"Tracker init exception: {e}", exc_info=True)
             self.error_occurred.emit(str(e))
@@ -301,6 +312,10 @@ class TrackingWorker(QThread):
 
             self.confidence_ready.emit(mapped.confidence)
             self.pose_ready.emit(mapped)
+            self.faces_ready.emit((
+                self._tracker.get_selected_face_index(),
+                self._tracker.get_face_boxes(),
+            ))
             self.frame_ready.emit(frame)
 
             elapsed = time.perf_counter() - t0
