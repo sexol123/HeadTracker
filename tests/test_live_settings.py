@@ -36,9 +36,12 @@ assert worker._camera._enhance is True, worker._camera._enhance
 assert worker._tracker._smoothing == 0.3, worker._tracker._smoothing
 assert worker._output._mode == "absolute", worker._output._mode
 assert worker._output._speed == 77.0, worker._output._speed
-assert worker._key_listener is not None, "hotkey listener not restarted"
+assert worker._key_listener is None, "UI-thread call must not touch the listener"
+assert worker._hotkey_request is not None, "hotkey restart must be deferred"
+worker._process_hotkey_request()
+assert worker._key_listener is not None, "hotkey listener not started by worker thread"
 worker._stop_mouse_hotkey()
-print("A. worker.update_live_settings: image options, smoothing, mouse mode/speed, hotkey OK")
+print("A. worker.update_live_settings: image options, smoothing, mouse mode/speed, deferred hotkey OK")
 
 # --- Part B: UI wiring — live widgets push settings to worker ---
 win = MainWindow(Profile())

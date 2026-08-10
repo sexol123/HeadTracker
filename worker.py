@@ -44,6 +44,7 @@ class TrackingWorker(QThread):
         self._key_listener = None
         self._last_mouse_hotkey: str | None = None
         self._last_mouse_stop_mode: str | None = None
+        self._hotkey_request: AppSettings | None = None
         self._calibration: CameraCalibration | None = None
         self._mutex = QMutex()
         self._last_raw_pose = Pose()
@@ -64,8 +65,9 @@ class TrackingWorker(QThread):
     def update_profile(self, profile: Profile):
         with QMutexLocker(self._mutex):
             self._profile = profile
-        if isinstance(self._output, MouseOutput):
-            self._output.update_profile(profile)
+            output = self._output
+        if isinstance(output, MouseOutput):
+            output.update_profile(profile)
 
     def run(self):
         log.info("Worker thread starting background initialization...")
@@ -84,16 +86,16 @@ class TrackingWorker(QThread):
         # 1. Initialize Camera in background thread
         try:
             if settings.camera_source == "websocket":
-                self._camera = WebSocketCamera()
-                success = self._camera.start(
+                camera = WebSocketCamera()
+                success = camera.start(
                     url=settings.camera_url,
                     mirror=settings.mirror,
                     rotation=settings.camera_rotation,
                     enhance=settings.image_enhance,
                 )
             else:
-                self._camera = Camera()
-                success = self._camera.start(
+                camera = Camera()
+                success = camera.start(
                     index=settings.camera_index,
                     width=settings.camera_width,
                     height=settings.camera_height,
@@ -103,6 +105,8 @@ class TrackingWorker(QThread):
                     url=settings.camera_url,
                     enhance=settings.image_enhance,
                 )
+            with QMutexLocker(self._mutex):
+                self._camera = camera if success else None
         except Exception as e:
             log.error(f"Camera init exception: {e}", exc_info=True)
             success = False
@@ -119,7 +123,7 @@ class TrackingWorker(QThread):
 
         # 2. Initialize HeadTracker in background thread
         try:
-            self._calibration = CameraCalibration(
+            calibration = CameraCalibration(
                 offset_x_cm=settings.cam_offset_x,
                 offset_y_cm=settings.cam_offset_y,
                 offset_z_cm=settings.cam_offset_z,
@@ -128,12 +132,15 @@ class TrackingWorker(QThread):
                 roll=settings.cam_rotation_roll,
                 fov=settings.camera_fov,
             )
-            self._tracker = HeadTracker(
+            tracker = HeadTracker(
                 face_hold_time=1.0,
                 confidence_threshold=0.3,
                 smoothing=settings.pose_smoothing,
-                calibration=self._calibration,
+                calibration=calibration,
             )
+            with QMutexLocker(self._mutex):
+                self._calibration = calibration
+                self._tracker = tracker
         except Exception as e:
             log.error(f"Tracker init exception: {e}", exc_info=True)
             self.error_occurred.emit(str(e))
@@ -149,21 +156,25 @@ class TrackingWorker(QThread):
         # 3. Initialize Output in background thread
         try:
             if settings.output_protocol == "freetrack":
-                self._output = FreeTrackOutput()
+                output = FreeTrackOutput()
             elif settings.output_protocol == "mouse":
-                self._output = MouseOutput(mode=settings.mouse_mode, speed=settings.mouse_speed)
-                self._output.update_profile(profile)
-                self._last_mouse_hotkey = settings.mouse_hotkey
-                self._last_mouse_stop_mode = settings.mouse_stop_mode
-                self._start_mouse_hotkey(settings)
+                output = MouseOutput(mode=settings.mouse_mode, speed=settings.mouse_speed)
+                output.update_profile(profile)
+                with QMutexLocker(self._mutex):
+                    self._last_mouse_hotkey = settings.mouse_hotkey
+                    self._last_mouse_stop_mode = settings.mouse_stop_mode
             else:
-                self._output = UdpOutput(host=settings.udp_host, port=settings.udp_port)
+                output = UdpOutput(host=settings.udp_host, port=settings.udp_port)
+            with QMutexLocker(self._mutex):
+                self._output = output
 
-            if not self._output.start():
+            if not output.start():
                 self.error_occurred.emit(t("error_output").format(settings.output_protocol))
                 self._cleanup()
                 self.stopped.emit()
                 return
+            if isinstance(output, MouseOutput):
+                self._start_mouse_hotkey(settings)
         except Exception as e:
             log.error(f"Output init exception: {e}", exc_info=True)
             self.error_occurred.emit(str(e))
@@ -183,6 +194,8 @@ class TrackingWorker(QThread):
         proto_tag = "FT" if settings.output_protocol == "freetrack" else ("Mouse" if settings.output_protocol == "mouse" else "UDP")
         while self._running:
             t0 = time.perf_counter()
+
+            self._process_hotkey_request()
 
             frame = self._camera.get_frame()
             if frame is None:
@@ -275,9 +288,11 @@ class TrackingWorker(QThread):
     def stop_tracking(self):
         log.info("Requesting worker stop...")
         self._running = False
-        if self._camera:
+        with QMutexLocker(self._mutex):
+            camera = self._camera
+        if camera:
             try:
-                self._camera.stop()
+                camera.stop()
             except Exception:
                 pass
         if self.isRunning():
@@ -295,10 +310,14 @@ class TrackingWorker(QThread):
         return self._last_mapped_pose
 
     def update_calibration(self, settings: AppSettings):
-        """Live-apply camera adaptation values (called from the UI thread)."""
-        if self._calibration is None:
+        """Live-apply camera adaptation values (called from the UI thread).
+        CameraCalibration is internally lock-protected, so no race with the
+        worker loop reading it."""
+        with QMutexLocker(self._mutex):
+            calibration = self._calibration
+        if calibration is None:
             return
-        self._calibration.update(
+        calibration.update(
             offset_x_cm=settings.cam_offset_x,
             offset_y_cm=settings.cam_offset_y,
             offset_z_cm=settings.cam_offset_z,
@@ -425,55 +444,88 @@ class TrackingWorker(QThread):
             self._key_listener = None
 
     def update_live_settings(self, settings: AppSettings):
-        cam = self._camera
-        if cam is not None:
-            try:
-                cam.set_image_options(
-                    mirror=settings.mirror,
-                    rotation=settings.camera_rotation,
-                    enhance=settings.image_enhance,
+        """Live-apply image/smoothing/mouse options (called from the UI thread).
+
+        All writes are guarded by the worker mutex. The mouse hotkey is NOT
+        restarted here: stopping/starting the keyboard listener blocks (join up
+        to 1s) and would race with the worker thread's cleanup. Instead a
+        request is queued and applied by _process_hotkey_request() inside the
+        worker loop."""
+        with QMutexLocker(self._mutex):
+            cam = self._camera
+            if cam is not None:
+                try:
+                    cam.set_image_options(
+                        mirror=settings.mirror,
+                        rotation=settings.camera_rotation,
+                        enhance=settings.image_enhance,
+                    )
+                except Exception as e:
+                    log.warning(f"Failed to apply image options live: {e}")
+            if self._tracker is not None:
+                try:
+                    self._tracker.set_smoothing(settings.pose_smoothing)
+                except Exception as e:
+                    log.warning(f"Failed to apply smoothing live: {e}")
+            if isinstance(self._output, MouseOutput):
+                try:
+                    self._output.set_mode(settings.mouse_mode)
+                    self._output.set_speed(settings.mouse_speed)
+                except Exception as e:
+                    log.warning(f"Failed to apply mouse options live: {e}")
+                hotkey_changed = (
+                    settings.mouse_hotkey != self._last_mouse_hotkey
+                    or settings.mouse_stop_mode != self._last_mouse_stop_mode
                 )
-            except Exception as e:
-                log.warning(f"Failed to apply image options live: {e}")
-        if self._tracker is not None:
-            try:
-                self._tracker.set_smoothing(settings.pose_smoothing)
-            except Exception as e:
-                log.warning(f"Failed to apply smoothing live: {e}")
-        if isinstance(self._output, MouseOutput):
-            try:
-                self._output.set_mode(settings.mouse_mode)
-                self._output.set_speed(settings.mouse_speed)
-            except Exception as e:
-                log.warning(f"Failed to apply mouse options live: {e}")
-            hotkey_changed = (
-                settings.mouse_hotkey != self._last_mouse_hotkey
-                or settings.mouse_stop_mode != self._last_mouse_stop_mode
-            )
-            self._last_mouse_hotkey = settings.mouse_hotkey
-            self._last_mouse_stop_mode = settings.mouse_stop_mode
-            if hotkey_changed:
-                self._stop_mouse_hotkey()
-                self._start_mouse_hotkey(settings)
+                self._last_mouse_hotkey = settings.mouse_hotkey
+                self._last_mouse_stop_mode = settings.mouse_stop_mode
+                if hotkey_changed:
+                    self._hotkey_request = settings
         log.debug("Live settings applied")
 
+    def _process_hotkey_request(self):
+        """Apply a pending mouse hotkey restart. Must run in the worker thread."""
+        with QMutexLocker(self._mutex):
+            request = self._hotkey_request
+            self._hotkey_request = None
+        if request is None:
+            return
+        try:
+            self._stop_mouse_hotkey()
+            self._start_mouse_hotkey(request)
+        except Exception as e:
+            log.warning(f"Failed to re-apply mouse hotkey: {e}")
+
     def _cleanup(self):
-        self._stop_mouse_hotkey()
-        if self._output:
+        with QMutexLocker(self._mutex):
+            listener = self._key_listener
+            output = self._output
+            camera = self._camera
+            tracker = self._tracker
+            self._key_listener = None
+            self._output = None
+            self._camera = None
+            self._tracker = None
+            self._hotkey_request = None
+        if listener is not None:
             try:
-                self._output.stop()
+                listener.stop()
+                listener.join(timeout=1.0)
+            except Exception as e:
+                log.warning(f"Error stopping keyboard listener: {e}")
+        if output:
+            try:
+                output.stop()
             except Exception as e:
                 log.warning(f"Error stopping output: {e}")
-            self._output = None
-        if self._camera:
+        if camera:
             try:
-                self._camera.stop()
+                camera.stop()
             except Exception as e:
                 log.warning(f"Error stopping camera: {e}")
-            self._camera = None
-        if self._tracker:
+        if tracker:
             try:
-                self._tracker.close()
+                tracker.close()
             except Exception as e:
                 log.warning(f"Error closing tracker: {e}")
             self._tracker = None

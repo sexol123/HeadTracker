@@ -37,20 +37,24 @@
 
 ---
 
-## P2. Гонки потоков в live-обновлениях
+## P2. Гонки потоков в live-обновлениях ✅
 
-**Суть:** `update_live_settings` / `update_calibration` вызываются из UI-потока и пишут в объекты воркер-потока (`_camera._mirror`, `_speed`, рестарт `_key_listener`). Простые присваивания атомарны, но `_stop_mouse_hotkey()` из UI-потока может пересечься с `_cleanup()` воркера → гонка на `_key_listener`.
+**Суть:** `update_live_settings` / `update_calibration` вызывались из UI-потока и писали в объекты воркер-потока. Простые присваивания атомарны, но `_stop_mouse_hotkey()` из UI-потока (join до 1 с) мог пересечься с `_cleanup()` воркера → гонка на `_key_listener` (слушатель мог остаться висеть после Stop).
 
-**Сложность:** средняя. **Файлы:** `worker.py`, `ui/main_window.py`.
+**Статус:** ✅ сделано.
 
-Шаги:
-1. В `TrackingWorker` добавить `live_settings_request = Signal(object)` и `calibration_request = Signal(object)`.
-2. В `main_window._on_live_setting_changed` / `_on_cam_adapt_changed` вместо прямых вызовов — `emit` (передача через очередь событий Qt = потокобезопасно, выполнится в воркер-потоке).
-3. Внутри обработчиков слотов в воркере — весь доступ к `_camera`/`_output`/`_tracker` держать так же под `QMutexLocker(self._mutex)` (мьютекс уже есть).
-4. `update_profile` / `start_tracking` перевести на тот же канал (сейчас уже под мьютексом — проверить согласованность).
-5. Тест: форсированный цикл «1000 live-изменений + Stop/Start» — без исключений, слушатель один.
+Важный факт: сигналы/слоты Qt здесь не помогли бы — объект QThread живёт в UI-потоке, поэтому его слоты выполняются там же, а не в воркер-потоке. Поэтому выбран другой путь:
 
-**Проверка:** стресс-тест из п.5, плюс регресс `test_live_settings.py`.
+Сделано:
+1. `worker.py`:
+   - `update_live_settings` — все лёгкие записи (image options, smoothing, mouse mode/speed) под `QMutexLocker(self._mutex)`; рестарт hotkey НЕ выполняется из UI-потока — ставится отложенный запрос `_hotkey_request`.
+   - `_process_hotkey_request()` — применяет рестарт в воркер-потоке (вызывается в начале каждой итерации цикла).
+   - `_cleanup()` — атомарно извлекает ссылки на listener/output/camera/tracker под мьютексом, останавливает их вне мьютекса.
+   - `stop_tracking`/`update_profile`/`update_calibration` — чтение общих полей под мьютексом.
+   - Присваивания в `run()` — под мьютексом, конструкторы вне (чтобы не держать мьютекс на время загрузки модели).
+2. `CameraCalibration` уже была внутренне lock-защищена — не трогалась.
+3. Тест `tests/test_worker_threads.py`: deferred-логика, change-detection (повторные одинаковые вызовы не плодят запросы), стресс «writer (UI) vs applier (воркер)» ~1 с, гонка «writer vs cleanup ×5» — без исключений, конечное состояние чистое.
+4. `run_tests.bat` → 15/15 PASS.
 
 ---
 
