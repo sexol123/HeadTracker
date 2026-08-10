@@ -27,7 +27,15 @@ from pathlib import Path
 
 log = logging.getLogger("ui")
 ICON_PATH = Path(__file__).parent.parent / "HeadTrackerIcon.png"
-MOUSE_HOTKEYS = [f"f{i}" for i in range(1, 13)] + ["space", "insert", "delete"]
+MOUSE_HOTKEYS = (
+    [f"f{i}" for i in range(1, 13)] + ["space", "insert", "delete"]
+    + [
+        "ctrl+f8", "ctrl+f9", "ctrl+f10",
+        "alt+f8", "alt+f9", "alt+f10",
+        "ctrl+shift+f8", "ctrl+shift+f9", "ctrl+shift+f10",
+        "ctrl+space", "ctrl+insert", "ctrl+delete",
+    ]
+)
 
 
 class MainWindow(QMainWindow):
@@ -496,6 +504,7 @@ class MainWindow(QMainWindow):
         self.combo_mouse_hotkey = QComboBox()
         for k in MOUSE_HOTKEYS:
             self.combo_mouse_hotkey.addItem(k.upper(), k)
+        self.combo_mouse_hotkey.setToolTip(t("mouse_hotkey_hint"))
         self._lbl_mouse_hotkey = QLabel(t("mouse_hotkey"))
         self._mouse_form.addRow(self._lbl_mouse_hotkey, self.combo_mouse_hotkey)
         self.combo_mouse_mode.currentIndexChanged.connect(self._on_live_setting_changed)

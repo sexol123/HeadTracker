@@ -390,36 +390,71 @@ class TrackingWorker(QThread):
 
     @staticmethod
     def _parse_hotkey(name: str):
+        """Parse a hotkey spec like 'f8', 'ctrl+f8' or 'ctrl+shift+f10'.
+        Returns (frozenset of modifier names, key) or None if invalid."""
         name = (name or "").strip().lower()
         if not name or KeyboardListener is None:
             return None
+        parts = [p.strip() for p in name.split("+")]
+        if not parts or not parts[-1]:
+            return None
+        valid_mods = {"ctrl", "alt", "shift"}
+        mods = frozenset()
+        for p in parts[:-1]:
+            if p not in valid_mods:
+                return None
+            mods = frozenset(set(mods) | {p})
+        base = parts[-1]
         attr = {
             "f1": "f1", "f2": "f2", "f3": "f3", "f4": "f4", "f5": "f5", "f6": "f6",
             "f7": "f7", "f8": "f8", "f9": "f9", "f10": "f10", "f11": "f11", "f12": "f12",
             "space": "space", "insert": "insert", "delete": "delete",
-        }.get(name)
+        }.get(base)
         if attr:
-            return getattr(Key, attr, None)
-        if len(name) == 1 and name.isprintable():
-            return KeyCode.from_char(name)
+            key = getattr(Key, attr, None)
+        elif len(base) == 1 and base.isprintable():
+            key = KeyCode.from_char(base)
+        else:
+            key = None
+        if key is None:
+            return None
+        return (mods, key)
+
+    @staticmethod
+    def _modifier_name(key) -> str | None:
+        """Map a pressed key to a modifier name ('ctrl'/'alt'/'shift'), handling
+        left/right/generic variants on Windows."""
+        if KeyboardListener is None:
+            return None
+        for name in ("ctrl", "alt", "shift"):
+            for attr in (name, name + "_l", name + "_r"):
+                v = getattr(Key, attr, None)
+                if v is not None and key == v:
+                    return name
         return None
 
     def _start_mouse_hotkey(self, settings: AppSettings):
         if KeyboardListener is None:
             log.warning("pynput keyboard unavailable - mouse hotkey disabled")
             return
-        key = self._parse_hotkey(settings.mouse_hotkey)
-        if key is None:
+        parsed = self._parse_hotkey(settings.mouse_hotkey)
+        if parsed is None:
             log.warning(f"Unknown mouse hotkey: {settings.mouse_hotkey!r}")
             return
+        required_mods, key = parsed
         mode = settings.mouse_stop_mode
         output = self._output
         emit = self.output_log
         key_name = settings.mouse_hotkey
         last_toggle = [0.0]
+        pressed_mods: set[str] = set()
 
         def on_press(k):
-            if k != key:
+            mod = self._modifier_name(k)
+            if mod is not None:
+                pressed_mods.add(mod)
+                return
+            if k != key or pressed_mods != set(required_mods):
                 return
             if mode == "toggle":
                 now = time.perf_counter()
@@ -432,6 +467,10 @@ class TrackingWorker(QThread):
                 emit.emit(f"Mouse » on ({key_name})")
 
         def on_release(k):
+            mod = self._modifier_name(k)
+            if mod is not None:
+                pressed_mods.discard(mod)
+                return
             if k == key and mode != "toggle" and output.is_active():
                 output.set_active(False)
                 emit.emit(f"Mouse » off ({key_name})")
