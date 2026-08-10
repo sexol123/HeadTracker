@@ -4,39 +4,16 @@ import os
 import logging
 import cv2
 import numpy as np
-from dataclasses import dataclass
 
 import mediapipe as mp
 from mediapipe.tasks.python import BaseOptions
 from mediapipe.tasks.python.vision import FaceLandmarker, FaceLandmarkerOptions
 
 from filter import AdaptiveExponentialFilter
+from pose import Pose
+from cam_calib import CameraCalibration, rotation_matrix_to_euler
 
 log = logging.getLogger("tracker")
-
-
-@dataclass
-class Pose:
-    yaw: float = 0.0
-    pitch: float = 0.0
-    roll: float = 0.0
-    x: float = 0.0
-    y: float = 0.0
-    z: float = 0.0
-    confidence: float = 0.0
-    timestamp: float = 0.0
-
-    def copy(self) -> "Pose":
-        return Pose(
-            yaw=self.yaw,
-            pitch=self.pitch,
-            roll=self.roll,
-            x=self.x,
-            y=self.y,
-            z=self.z,
-            confidence=self.confidence,
-            timestamp=self.timestamp,
-        )
 
 
 # Canonical 3D face model points (mm) for PnP
@@ -67,6 +44,7 @@ class HeadTracker:
         face_hold_time: float = 1.0,
         confidence_threshold: float = 0.3,
         smoothing: float = 0.0,
+        calibration: CameraCalibration | None = None,
     ):
         log.info("Initializing HeadTracker...")
         if not os.path.isfile(MODEL_PATH):
@@ -94,6 +72,7 @@ class HeadTracker:
         self._last_landmarks = None
         self._smoothing: float = max(0.0, min(1.0, smoothing))
         self._smooth_state: dict | None = None
+        self._calibration: CameraCalibration | None = calibration
 
         # Smooth confidence: fast rise, slow fall
         self._confidence_smoother = AdaptiveExponentialFilter(
@@ -113,6 +92,9 @@ class HeadTracker:
         self._smoothing = max(0.0, min(1.0, smoothing))
         if self._smoothing <= 0.0:
             self._smooth_state = None
+
+    def set_calibration(self, calibration: CameraCalibration | None):
+        self._calibration = calibration
 
     def _apply_smoothing(self, pose: Pose) -> Pose:
         if self._smoothing <= 0.0:
@@ -203,8 +185,12 @@ class HeadTracker:
             dtype=np.float64,
         )
 
-        # Camera intrinsics (approximate for webcam)
-        focal_length = camera_width
+        # Camera intrinsics (approximate for webcam, FOV-adjustable)
+        focal_length = (
+            self._calibration.focal_length(camera_width)
+            if self._calibration is not None
+            else float(camera_width)
+        )
         center = (camera_width / 2.0, camera_height / 2.0)
         camera_matrix = np.array(
             [
@@ -246,6 +232,9 @@ class HeadTracker:
             confidence=visibility_ratio,
             timestamp=timestamp,
         )
+
+        if self._calibration is not None:
+            raw_pose = self._calibration.apply(raw_pose)
 
         raw_pose = self._apply_smoothing(raw_pose)
 
@@ -289,28 +278,8 @@ class HeadTracker:
 
     @staticmethod
     def _rotation_matrix_to_euler(R: np.ndarray) -> dict:
-        sy = math.sqrt(R[0, 0] ** 2 + R[1, 0] ** 2)
-        singular = sy < 1e-6
-
-        if not singular:
-            # ZYX decomposition: angles about the model's Z (in-plane), Y (vertical),
-            # X (horizontal) axes. For the face model used here (+Y up, +Z toward camera)
-            # these correspond to: Z = head tilt (roll), Y = horizontal turn (yaw),
-            # X = vertical nod (pitch). Signs flipped to the sim convention:
-            # positive yaw = turn right, positive pitch = look up, positive roll = tilt right.
-            turn = -math.atan2(-R[2, 0], sy)
-            nod = -math.atan2(R[2, 1], R[2, 2])
-            tilt = -math.atan2(R[1, 0], R[0, 0])
-        else:
-            turn = -math.atan2(-R[2, 0], sy)
-            nod = 0.0
-            tilt = -math.atan2(-R[1, 2], R[1, 1])
-
-        return {
-            "yaw": math.degrees(turn),
-            "pitch": math.degrees(nod),
-            "roll": math.degrees(tilt),
-        }
+        yaw, pitch, roll = rotation_matrix_to_euler(R)
+        return {"yaw": yaw, "pitch": pitch, "roll": roll}
 
     def close(self):
         log.info("Closing HeadTracker...")

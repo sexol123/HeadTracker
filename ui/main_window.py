@@ -207,20 +207,6 @@ class MainWindow(QMainWindow):
         self.lbl_status = QLabel(t("status_stopped"))
         self._lbl_status_title = QLabel(t("tab_status") + ":")
         self._info_form.addRow(self._lbl_status_title, self.lbl_status)
-        self.slider_smoothing = QSlider(Qt.Horizontal)
-        self.slider_smoothing.setRange(0, 100)
-        self.slider_smoothing.setValue(50)
-        self.slider_smoothing.valueChanged.connect(self._on_smoothing_changed)
-        self.lbl_smoothing_val = QLabel("50%")
-        self.lbl_smoothing_val.setFixedWidth(40)
-        self._lbl_smoothing = QLabel(t("smoothing"))
-        self._lbl_smoothing.setToolTip(t("smoothing_tip"))
-        smoothing_row = QWidget()
-        smoothing_layout = QHBoxLayout(smoothing_row)
-        smoothing_layout.setContentsMargins(0, 0, 0, 0)
-        smoothing_layout.addWidget(self.slider_smoothing, 1)
-        smoothing_layout.addWidget(self.lbl_smoothing_val)
-        self._info_form.addRow(self._lbl_smoothing, smoothing_row)
         self._info_group.setLayout(self._info_form)
 
         status_layout = QHBoxLayout()
@@ -290,7 +276,66 @@ class MainWindow(QMainWindow):
         form.addRow(self.chk_mirror)
         self.chk_enhance = QCheckBox(t("enhance"))
         form.addRow(self.chk_enhance)
+        self.combo_rotation.currentIndexChanged.connect(self._on_live_setting_changed)
+        self.chk_mirror.toggled.connect(self._on_live_setting_changed)
+        self.chk_enhance.toggled.connect(self._on_live_setting_changed)
         layout.addLayout(form)
+
+        self._cam_adapt_group = QGroupBox(t("cam_adaptation"))
+        adapt_form = QFormLayout()
+
+        def _adapt_spin(min_val, max_val, step, decimals, suffix):
+            sp = QDoubleSpinBox()
+            sp.setRange(min_val, max_val)
+            sp.setSingleStep(step)
+            sp.setDecimals(decimals)
+            if suffix:
+                sp.setSuffix(suffix)
+            return sp
+
+        self.spin_cam_offset_x = _adapt_spin(-100, 100, 1.0, 1, " cm")
+        self.spin_cam_offset_y = _adapt_spin(-100, 100, 1.0, 1, " cm")
+        self.spin_cam_offset_z = _adapt_spin(0, 300, 1.0, 1, " cm")
+        self._lbl_cam_offset_x = QLabel(t("cam_offset_x"))
+        adapt_form.addRow(self._lbl_cam_offset_x, self.spin_cam_offset_x)
+        self._lbl_cam_offset_y = QLabel(t("cam_offset_y"))
+        adapt_form.addRow(self._lbl_cam_offset_y, self.spin_cam_offset_y)
+        self._lbl_cam_offset_z = QLabel(t("cam_offset_z"))
+        adapt_form.addRow(self._lbl_cam_offset_z, self.spin_cam_offset_z)
+
+        self.spin_cam_yaw = _adapt_spin(-90, 90, 1.0, 1, "°")
+        self.spin_cam_pitch = _adapt_spin(-90, 90, 1.0, 1, "°")
+        self.spin_cam_roll = _adapt_spin(-90, 90, 1.0, 1, "°")
+        self._lbl_cam_yaw = QLabel(t("cam_tilt_yaw"))
+        adapt_form.addRow(self._lbl_cam_yaw, self.spin_cam_yaw)
+        self._lbl_cam_pitch = QLabel(t("cam_tilt_pitch"))
+        adapt_form.addRow(self._lbl_cam_pitch, self.spin_cam_pitch)
+        self._lbl_cam_roll = QLabel(t("cam_tilt_roll"))
+        adapt_form.addRow(self._lbl_cam_roll, self.spin_cam_roll)
+
+        self.spin_cam_fov = _adapt_spin(0, 120, 1.0, 1, "°")
+        self.spin_cam_fov.setSpecialValueText("0")
+        self._lbl_cam_fov = QLabel(t("cam_fov"))
+        adapt_form.addRow(self._lbl_cam_fov, self.spin_cam_fov)
+
+        center_layout = QHBoxLayout()
+        self.btn_cam_center = QPushButton(t("btn_set_center"))
+        self.btn_cam_center.clicked.connect(self._on_cam_center)
+        center_layout.addWidget(self.btn_cam_center)
+        self.btn_cam_center_reset = QPushButton(t("btn_reset_center"))
+        self.btn_cam_center_reset.clicked.connect(self._on_cam_center_reset)
+        center_layout.addWidget(self.btn_cam_center_reset)
+        adapt_form.addRow(center_layout)
+
+        self.btn_cam_setup = QPushButton(t("cam_setup_btn"))
+        self.btn_cam_setup.clicked.connect(self._on_cam_setup)
+        adapt_form.addRow(self.btn_cam_setup)
+
+        for sp in (self.spin_cam_offset_x, self.spin_cam_offset_y, self.spin_cam_offset_z,
+                   self.spin_cam_yaw, self.spin_cam_pitch, self.spin_cam_roll, self.spin_cam_fov):
+            sp.valueChanged.connect(self._on_cam_adapt_changed)
+        self._cam_adapt_group.setLayout(adapt_form)
+        layout.addWidget(self._cam_adapt_group)
 
         # IP camera stats (hidden by default)
         self._ip_stats_group = QGroupBox(t("stream_stats"))
@@ -327,6 +372,20 @@ class MainWindow(QMainWindow):
         scroll = QScrollArea(); scroll.setWidgetResizable(True)
         inner = QWidget(); layout = QVBoxLayout(inner)
 
+        self._smoothing_group = QGroupBox(t("smoothing"))
+        self._smoothing_group.setToolTip(t("smoothing_tip"))
+        smoothing_layout = QHBoxLayout(self._smoothing_group)
+        self.slider_smoothing = QSlider(Qt.Horizontal)
+        self.slider_smoothing.setRange(0, 100)
+        self.slider_smoothing.setValue(50)
+        self.slider_smoothing.valueChanged.connect(self._on_smoothing_changed)
+        self.slider_smoothing.valueChanged.connect(self._on_live_setting_changed)
+        self.lbl_smoothing_val = QLabel("50%")
+        self.lbl_smoothing_val.setFixedWidth(40)
+        smoothing_layout.addWidget(self.slider_smoothing, 1)
+        smoothing_layout.addWidget(self.lbl_smoothing_val)
+        layout.addWidget(self._smoothing_group)
+
         profile_layout = QHBoxLayout()
         self.combo_profile = QComboBox()
         self.combo_profile.currentIndexChanged.connect(self._on_profile_changed)
@@ -341,6 +400,10 @@ class MainWindow(QMainWindow):
         profile_layout.addWidget(btn_delete)
         self.btn_delete = btn_delete
         layout.addLayout(profile_layout)
+
+        self.btn_axes_setup = QPushButton(t("axes_setup_btn"))
+        self.btn_axes_setup.clicked.connect(self._on_axes_setup)
+        layout.addWidget(self.btn_axes_setup)
 
         self._axis_widgets = {}
         self._axis_form_labels = {}
@@ -361,6 +424,11 @@ class MainWindow(QMainWindow):
                                                "deadzone": spin_deadzone, "inverted": chk_inverted}
             self._axis_form_labels[axis_name] = {"sensitivity": lbl_sensitivity,
                                                    "deadzone": lbl_deadzone}
+            spin_sensitivity.valueChanged.connect(lambda _, n=axis_name: self._on_axis_changed(n))
+            spin_deadzone.valueChanged.connect(lambda _, n=axis_name: self._on_axis_changed(n))
+            chk_enabled.toggled.connect(lambda _, n=axis_name: self._on_axis_changed(n))
+            chk_inverted.toggled.connect(lambda _, n=axis_name: self._on_axis_changed(n))
+
         layout.addStretch()
         scroll.setWidget(inner)
         tab_layout = QVBoxLayout(tab); tab_layout.addWidget(scroll)
@@ -421,6 +489,10 @@ class MainWindow(QMainWindow):
             self.combo_mouse_hotkey.addItem(k.upper(), k)
         self._lbl_mouse_hotkey = QLabel(t("mouse_hotkey"))
         self._mouse_form.addRow(self._lbl_mouse_hotkey, self.combo_mouse_hotkey)
+        self.combo_mouse_mode.currentIndexChanged.connect(self._on_live_setting_changed)
+        self.spin_mouse_speed.valueChanged.connect(self._on_live_setting_changed)
+        self.combo_mouse_stop.currentIndexChanged.connect(self._on_live_setting_changed)
+        self.combo_mouse_hotkey.currentIndexChanged.connect(self._on_live_setting_changed)
         layout.addWidget(self._mouse_widget)
 
         layout.addLayout(self._output_form)
@@ -572,8 +644,9 @@ class MainWindow(QMainWindow):
         self._lbl_fps_title.setText(t("fps"))
         self._lbl_profile_title.setText(t("profile_name"))
         self._lbl_status_title.setText(t("tab_status") + ":")
-        self._lbl_smoothing.setText(t("smoothing"))
-        self._lbl_smoothing.setToolTip(t("smoothing_tip"))
+        # Axes tab
+        self._smoothing_group.setTitle(t("smoothing"))
+        self._smoothing_group.setToolTip(t("smoothing_tip"))
         # Camera tab
         self._lbl_source.setText(t("source"))
         self._lbl_camera.setText(t("camera"))
@@ -581,6 +654,17 @@ class MainWindow(QMainWindow):
         self._lbl_width.setText(t("width"))
         self._lbl_height.setText(t("height"))
         self._lbl_fps_cam.setText(t("fps"))
+        self._cam_adapt_group.setTitle(t("cam_adaptation"))
+        self._lbl_cam_offset_x.setText(t("cam_offset_x"))
+        self._lbl_cam_offset_y.setText(t("cam_offset_y"))
+        self._lbl_cam_offset_z.setText(t("cam_offset_z"))
+        self._lbl_cam_yaw.setText(t("cam_tilt_yaw"))
+        self._lbl_cam_pitch.setText(t("cam_tilt_pitch"))
+        self._lbl_cam_roll.setText(t("cam_tilt_roll"))
+        self._lbl_cam_fov.setText(t("cam_fov"))
+        self.btn_cam_center.setText(t("btn_set_center"))
+        self.btn_cam_center_reset.setText(t("btn_reset_center"))
+        self.btn_cam_setup.setText(t("cam_setup_btn"))
         self._ip_stats_group.setTitle(t("stream_stats"))
         self._lbl_stat_fps.setText(t("fps"))
         self._lbl_stat_ft.setText(t("frame_time"))
@@ -671,6 +755,13 @@ class MainWindow(QMainWindow):
         self.spin_height.setValue(s.camera_height)
         self.spin_fps.setValue(s.camera_fps)
         self.edit_url.setText(s.camera_url)
+        self.spin_cam_offset_x.setValue(s.cam_offset_x)
+        self.spin_cam_offset_y.setValue(s.cam_offset_y)
+        self.spin_cam_offset_z.setValue(s.cam_offset_z)
+        self.spin_cam_yaw.setValue(s.cam_rotation_yaw)
+        self.spin_cam_pitch.setValue(s.cam_rotation_pitch)
+        self.spin_cam_roll.setValue(s.cam_rotation_roll)
+        self.spin_cam_fov.setValue(s.camera_fov)
 
         rot_idx = self.combo_rotation.findData(s.camera_rotation)
         if rot_idx != -1:
@@ -741,6 +832,12 @@ class MainWindow(QMainWindow):
     def _on_smoothing_changed(self, value):
         self.lbl_smoothing_val.setText(f"{value}%")
 
+    def _on_live_setting_changed(self, *_):
+        if not self.tracking_active:
+            return
+        self._read_settings_from_ui()
+        self.worker.update_live_settings(self.app_settings)
+
     def _on_protocol_changed(self, index):
         proto = self.combo_protocol.currentData()
         self._udp_widget.setVisible(proto == "udp")
@@ -769,6 +866,13 @@ class MainWindow(QMainWindow):
         s.camera_rotation = self.combo_rotation.currentData() or 0
         s.mirror = self.chk_mirror.isChecked()
         s.image_enhance = self.chk_enhance.isChecked()
+        s.cam_offset_x = self.spin_cam_offset_x.value()
+        s.cam_offset_y = self.spin_cam_offset_y.value()
+        s.cam_offset_z = self.spin_cam_offset_z.value()
+        s.cam_rotation_yaw = self.spin_cam_yaw.value()
+        s.cam_rotation_pitch = self.spin_cam_pitch.value()
+        s.cam_rotation_roll = self.spin_cam_roll.value()
+        s.camera_fov = self.spin_cam_fov.value()
         s.output_protocol = self.combo_protocol.currentData() or "udp"
         s.mouse_mode = self.combo_mouse_mode.currentData() or "velocity"
         s.mouse_speed = self.spin_mouse_speed.value()
@@ -777,6 +881,75 @@ class MainWindow(QMainWindow):
         s.pose_smoothing = self.slider_smoothing.value() / 100.0
         s.udp_host = self.edit_udp_host.text().strip() or "127.0.0.1"
         s.udp_port = self.spin_udp_port.value()
+
+    def _on_cam_adapt_changed(self, *_):
+        self._read_settings_from_ui()
+        self.worker.update_calibration(self.app_settings)
+
+    def _on_axis_changed(self, axis_name, *_):
+        w = self._axis_widgets.get(axis_name)
+        if w is None:
+            return
+        ax = self.profile.axes.get(axis_name)
+        if ax is None:
+            return
+        ax.enabled = w["enabled"].isChecked()
+        ax.sensitivity = w["sensitivity"].value()
+        ax.deadzone = w["deadzone"].value()
+        ax.inverted = w["inverted"].isChecked()
+        if self.tracking_active:
+            self.worker.update_profile(self.profile)
+
+    def _on_axes_setup(self):
+        from ui.axes_helper_dialog import AxesHelperDialog
+        dlg = AxesHelperDialog(self.profile, self.worker, parent=self)
+
+        def apply_axis(name, sens, dz):
+            w = self._axis_widgets.get(name)
+            if w is None:
+                return
+            w["sensitivity"].setValue(round(sens, 1))
+            w["deadzone"].setValue(round(dz, 1))
+
+        dlg.on_axis_applied = apply_axis
+        dlg.exec()
+
+    def _on_cam_center(self):
+        if not self.tracking_active:
+            log.info("Set center skipped: tracking not running")
+            self.lbl_status.setText(t("cam_center_need_tracking"))
+            return
+        if self.worker.recenter_camera():
+            self.lbl_status.setText(t("cam_center_ok"))
+            log.info(t("cam_center_ok"))
+        else:
+            log.warning("Set center failed: face not tracked")
+            self.lbl_status.setText(t("cam_center_need_tracking"))
+
+    def _on_cam_center_reset(self):
+        self.worker.reset_camera_center()
+        self.lbl_status.setText(t("cam_center_reset_ok"))
+        log.info("Camera center cleared")
+
+    def _on_cam_setup(self):
+        from ui.cam_setup_dialog import CamSetupDialog
+        s = self.app_settings
+        dlg = CamSetupDialog(
+            offset_x_cm=s.cam_offset_x, offset_y_cm=s.cam_offset_y, offset_z_cm=s.cam_offset_z,
+            yaw=s.cam_rotation_yaw, pitch=s.cam_rotation_pitch, roll=s.cam_rotation_roll,
+            parent=self,
+        )
+
+        def apply_vals(ox, oy, oz, yaw, pitch, roll):
+            self.spin_cam_offset_x.setValue(round(ox, 1))
+            self.spin_cam_offset_y.setValue(round(oy, 1))
+            self.spin_cam_offset_z.setValue(round(oz, 1))
+            self.spin_cam_yaw.setValue(round(yaw, 1))
+            self.spin_cam_pitch.setValue(round(pitch, 1))
+            self.spin_cam_roll.setValue(round(roll, 1))
+
+        dlg.apply_callback = apply_vals
+        dlg.exec()
 
     def _on_profile_new(self):
         self.btn_new.setEnabled(False)
@@ -981,7 +1154,6 @@ class MainWindow(QMainWindow):
         log.info("Tracking stopped")
 
     def _set_controls_enabled(self, enabled: bool):
-        self.combo_profile.setEnabled(enabled)
         self.btn_new.setEnabled(enabled)
         self.btn_delete.setEnabled(enabled)
         self.combo_cam_type.setEnabled(enabled)
@@ -990,15 +1162,7 @@ class MainWindow(QMainWindow):
         self.spin_width.setEnabled(enabled)
         self.spin_height.setEnabled(enabled)
         self.spin_fps.setEnabled(enabled)
-        self.combo_rotation.setEnabled(enabled)
-        self.chk_mirror.setEnabled(enabled)
-        self.chk_enhance.setEnabled(enabled)
         self.combo_protocol.setEnabled(enabled)
-        self.combo_mouse_mode.setEnabled(enabled)
-        self.spin_mouse_speed.setEnabled(enabled)
-        self.combo_mouse_stop.setEnabled(enabled)
-        self.combo_mouse_hotkey.setEnabled(enabled)
-        self.slider_smoothing.setEnabled(enabled)
         self.edit_udp_host.setEnabled(enabled)
         self.spin_udp_port.setEnabled(enabled)
         if enabled:

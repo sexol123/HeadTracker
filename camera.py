@@ -158,6 +158,14 @@ class Camera:
         log.info("Camera opened OK")
         return True
 
+    def set_image_options(self, mirror: bool | None = None, rotation: int | None = None, enhance: bool | None = None):
+        if mirror is not None:
+            self._mirror = bool(mirror)
+        if rotation is not None:
+            self._rotation = int(rotation)
+        if enhance is not None:
+            self._enhance = bool(enhance)
+
     def get_frame(self) -> CameraFrame | None:
         if self._cap is None or not self._cap.isOpened():
             return None
@@ -299,6 +307,14 @@ class WebSocketCamera:
         self._thread.start()
         log.info(f"WebSocket camera thread started: {url}")
         return True
+
+    def set_image_options(self, mirror: bool | None = None, rotation: int | None = None, enhance: bool | None = None):
+        if mirror is not None:
+            self._mirror = bool(mirror)
+        if rotation is not None:
+            self._rotation = int(rotation)
+        if enhance is not None:
+            self._enhance = bool(enhance)
 
     def _receive_loop(self):
         import websocket

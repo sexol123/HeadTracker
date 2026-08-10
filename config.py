@@ -65,6 +65,13 @@ class AppSettings:
     camera_source: str = "local"
     camera_rotation: int = 0
     image_enhance: bool = False
+    cam_offset_x: float = 0.0
+    cam_offset_y: float = 0.0
+    cam_offset_z: float = 0.0
+    cam_rotation_yaw: float = 0.0
+    cam_rotation_pitch: float = 0.0
+    cam_rotation_roll: float = 0.0
+    camera_fov: float = 0.0
     output_protocol: str = "freetrack"
     udp_host: str = "127.0.0.1"
     udp_port: int = 4242

@@ -14,6 +14,7 @@ Head tracking software for racing and flight simulators. Uses a regular USB webc
 - **Per-axis settings** — Sensitivity, deadzone, inversion for each axis
 - **Game presets** — Pre-configured profiles for popular simulators
 - **Profile system** — Create, delete profiles; profiles apply instantly on selection
+- **Live settings** — Profile, per-axis settings, smoothing, camera rotation/mirror/CLAHE, camera adaptation and mouse options change instantly while tracking runs
 - **Stream stats** — FPS, frame time, bandwidth, resolution, dropped frames for IP cameras
 - **Error handling** — Graceful recovery with user-facing error dialogs
 - **Occlusion handling** — Smooth pose blending when face is partially covered
@@ -110,6 +111,19 @@ python main.py -logging     # Same as -debug
 > **Tip:** the game must be (re)started **after** tracking is running, with the same
 > user privileges as the tracker — FreeTrack games read the shared memory at startup.
 
+### Live Settings
+
+While tracking is running you can still change most settings and they apply
+instantly, without restarting:
+
+- **Axes tab** — profile selector, per-axis settings (enabled/sensitivity/deadzone/inverted), smoothing slider
+- **Camera tab** — rotation, mirror, low light enhancement, camera adaptation values (position/tilt/FOV/set center)
+- **Output tab (Mouse)** — mode, speed, stop method, hotkey
+
+Only the **camera source** (local index, URL, resolution, FPS) and the **output
+protocol** (FreeTrack/UDP host/port) need a restart — those stay locked while
+tracking.
+
 ### UI Layout
 
 ```
@@ -131,6 +145,16 @@ python main.py -logging     # Same as -debug
 The Axes tab contains:
 - **Profile selector** at the top — pick a profile or create a new one
 - **Per-axis settings** — Enabled, Sensitivity, Deadzone, Inverted for each of 6 axes (Yaw, Pitch, Roll, X, Y, Z)
+- **Axes helper…** — opens a visual tuning dialog:
+  - **Response curves** — one mini-plot per axis showing the input→output
+    transfer function. Drag the white circles on the axis to set the deadzone,
+    drag the curve to set the sensitivity (changes apply live). The yellow dot
+    shows your current head position on the curve.
+  - **Live test screen** — a 2D view of the X/Y output (with the deadzone
+    square) and gauges for Yaw/Pitch/Roll: the white tick is the input, the
+    green bar is the output after deadzone and sensitivity, so you can see the
+    amplification and the deadzone band while moving your head. Needs tracking
+    to be running.
 
 ### Buttons
 
@@ -165,8 +189,41 @@ If the camera is mounted sideways or upside down:
 1. Camera tab → **Rotation:** pick 90°/180°/270° until your face is upright in the preview
 2. **Mirror** flips the image horizontally (selfie-style preview)
 
-Both options are applied to the image, preview, and tracking consistently. After changing
-them, keep your head straight for a second: Yaw/Pitch/Roll should read ≈ 0.
+Both options are applied to the image, preview, and tracking consistently, instantly
+even while tracking runs. After changing them, keep your head straight for a second:
+Yaw/Pitch/Roll should read ≈ 0.
+
+### Camera Adaptation
+
+The camera rarely sits exactly at eye level pointing straight at your face — the
+measured pose is then skewed (a camera above the monitor adds a fake pitch, a
+camera off to the side adds yaw, and so on). The **Camera adaptation** group on
+the Camera tab compensates the mounting geometry so the pose is expressed
+relative to the monitor, like in commercial trackers:
+
+- **Camera position (cm)** — where the camera sits relative to the monitor
+  center: `X` right (+), `Y` up (+), `Z` distance from the screen toward you.
+- **Camera tilt (deg)** — how the camera is aimed: `Yaw` turned sideways,
+  `Pitch` (positive = looks down at the face), `Roll` tilted.
+- **FOV (deg)** — horizontal field of view of your camera (webcam specs or a
+  guess); `0` keeps the legacy estimate (≈53°). Correct FOV makes rotations
+  and distance read accurately. Typical webcams: 60–90°.
+- **Set center** — sit up straight facing the screen and press it while
+  tracking: the current pose becomes the zero reference (rotation and
+  position). **Reset center** clears it. The center is per session, it is not
+  saved between runs.
+- **Setup helper…** — opens a visual dialog: two schematic views (top and
+  side) of the monitor, the camera and your face. Drag the camera (green) and
+  the yellow rotation handle, and drag the face (cyan) to set your sitting
+  distance. With **Auto-aim at face** enabled, the camera tilt values are
+  computed automatically so the camera points at the face; uncheck it to
+  adjust Yaw/Pitch by hand. The roll slider and the live value readout sit
+  below the views. Every change is applied live to the settings, then fine
+  tune in the spin boxes if needed.
+
+All values apply live while tracking, so you can tune them by watching the
+Status tab (angles should read ≈ 0 when you look straight at the screen).
+Defaults (all zeros, FOV 0) keep the previous behavior exactly.
 
 ### Low Light
 
@@ -174,13 +231,15 @@ For dim environments, enable CLAHE image enhancement:
 
 1. Camera tab → check `Enhance low light (CLAHE)`
 2. Adaptive histogram equalization improves face detection in poor lighting
+3. Applies instantly — can be toggled during tracking
 
 ### Smoothing
 
-Status tab → **Smoothing** slider (0–100%) applies exponential smoothing to the
+Axes tab → **Smoothing** slider (0–100%) applies exponential smoothing to the
 whole head pose (yaw/pitch/roll and position) before it is sent to any protocol.
 Higher values feel smoother but add lag; start around 50%. It is reset when the
-face is lost and re-acquired.
+face is lost and re-acquired. The slider stays active during tracking — you can
+tune it live.
 
 ### Output Protocols
 
@@ -220,6 +279,9 @@ Useful for games that have no FreeTrack/UDP support but accept mouse input:
 4. **Stop method** — the mouse moves only while you **hold** the hotkey
    (default `F8`, release to stop), or **toggles** with each press.
    Use it to pause the view without returning your head to center.
+
+Mode, speed, stop method and hotkey can all be changed while tracking runs —
+they apply immediately.
 
 Pose is smoothed (EMA) and a small minimum deadzone is applied so small head
 jitter (especially the pitch drift while turning your head sideways) does not
