@@ -25,6 +25,33 @@ from ui.main_window import MainWindow
 from config import load_profile, load_settings, PROFILES_DIR
 from i18n import set_language, t
 
+
+def parse_cli(argv: list[str]) -> tuple[str | None, bool]:
+    """Parse CLI args: --profile <name>, --autostart.
+    Returns (profile_name, autostart)."""
+    profile_name: str | None = None
+    autostart = False
+    i = 0
+    while i < len(argv):
+        arg = argv[i]
+        if arg == "--profile":
+            if i + 1 < len(argv) and not argv[i + 1].startswith("--"):
+                profile_name = argv[i + 1]
+                i += 2
+                continue
+            i += 1
+            continue
+        if arg.startswith("--profile="):
+            profile_name = arg.split("=", 1)[1]
+            i += 1
+            continue
+        if arg == "--autostart":
+            autostart = True
+            i += 1
+            continue
+        i += 1
+    return profile_name, autostart
+
 LOGS_DIR = Path(__file__).parent / "logs"
 LOGS_DIR.mkdir(exist_ok=True)
 ICON_PATH = Path(__file__).parent / "HeadTrackerIcon.png"
@@ -193,14 +220,24 @@ def main():
 
     log.info(f"Profile loaded: {profile.name}")
 
+    profile_name, autostart = parse_cli(sys.argv[1:])
+    if profile_name:
+        log.info(f"CLI: --profile {profile_name}")
+    if autostart:
+        log.info("CLI: --autostart")
+
     try:
         window = MainWindow(profile)
         log_bridge.message.connect(window.append_log)
         ui_handler.set_emitter(log_bridge.message.emit)
         ui_handler.flush_buffer()
+        if profile_name:
+            window.select_profile_by_name(profile_name)
         window.show()
         _splash_timer.stop()
         splash.finish(window)
+        if autostart:
+            window.autostart()
         log.info("Main window shown — entering event loop")
     except Exception as e:
         log.critical(f"Failed to create main window: {e}", exc_info=True)

@@ -791,6 +791,28 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, t("status_error"), t("failed_load_profile").format(e))
         self._update_buttons_for_default()
 
+    def select_profile_by_name(self, name: str) -> bool:
+        """CLI entry: select a profile by name (case-insensitive)."""
+        for i in range(self.combo_profile.count()):
+            if self.combo_profile.itemText(i).lower() == name.lower():
+                self.combo_profile.setCurrentIndex(i)
+                log.info(f"CLI selected profile: {self.combo_profile.itemText(i)}")
+                return True
+        log.warning(f"CLI: profile '{name}' not found")
+        return False
+
+    def autostart(self, delay_ms: int = 1500):
+        """CLI entry: auto-start tracking shortly after the window is shown."""
+        log.info(f"Autostart scheduled in {delay_ms} ms")
+        QTimer.singleShot(delay_ms, self._autostart_trigger)
+
+    def _autostart_trigger(self):
+        if self.tracking_active:
+            log.info("Autostart skipped — tracking already active")
+            return
+        log.info("Autostart: starting tracking")
+        self._start_tracking()
+
     def _update_buttons_for_default(self):
         is_default = self.profile.name == "Default"
         self.btn_delete.setEnabled(not is_default)

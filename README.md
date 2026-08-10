@@ -98,6 +98,7 @@ chmod +x HeadTracker.command
 python main.py              # Normal mode
 python main.py -debug       # Debug mode (file + console logging)
 python main.py -logging     # Same as -debug
+python main.py --profile beamng --autostart   # Start with a profile and auto-track
 ```
 
 ## Testing
