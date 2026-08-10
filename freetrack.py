@@ -200,10 +200,14 @@ class FreeTrackOutput:
         self._data_id += 1
         d2r = math.pi / 180.0
 
+        mutex_acquired = False
         if self._mutex:
-            wait_result = kernel32.WaitForSingleObject(self._mutex, 100)
-            if wait_result != 0 and wait_result != 1:
-                log.warning(f"WaitForSingleObject returned {wait_result}")
+            # Short advisory wait — on contention write anyway, never drop the frame
+            wait_result = kernel32.WaitForSingleObject(self._mutex, 5)
+            if wait_result == 0 or wait_result == 0x80:  # WAIT_OBJECT_0 (0) or WAIT_ABANDONED (0x80)
+                mutex_acquired = True
+            else:
+                log.debug(f"WaitForSingleObject returned {wait_result} — writing without mutex")
 
         try:
             self._heap.data.DataID = self._data_id
@@ -234,7 +238,7 @@ class FreeTrackOutput:
                     f"X={self._heap.data.X:.1f} Y={self._heap.data.Y:.1f} Z={self._heap.data.Z:.1f}"
                 )
         finally:
-            if self._mutex:
+            if self._mutex and mutex_acquired:
                 kernel32.ReleaseMutex(self._mutex)
 
     def stop(self):
@@ -266,28 +270,28 @@ class FreeTrackOutput:
             return
         dll_dir = os.path.dirname(os.path.abspath(__file__))
 
-        try:
-            key = winreg.CreateKeyEx(
-                winreg.HKEY_CURRENT_USER,
-                r"Software\Freetrack\FreetrackClient",
-                0,
-                winreg.KEY_SET_VALUE,
-            )
-            winreg.SetValueEx(key, "Path", 0, winreg.REG_SZ, dll_dir + "\\")
-            winreg.CloseKey(key)
-            log.info(f"Registry: FreeTrack path set to {dll_dir}\\")
-        except OSError as e:
-            log.warning(f"Registry: Failed to set FreeTrack path: {e}")
+        has_npclient = os.path.exists(os.path.join(dll_dir, "NPClient.dll")) or os.path.exists(os.path.join(dll_dir, "NPClient64.dll"))
 
-        try:
-            key = winreg.CreateKeyEx(
-                winreg.HKEY_CURRENT_USER,
+        subkeys = [
+            r"Software\Freetrack\FreetrackClient",
+            r"Software\WOW6432Node\Freetrack\FreetrackClient",
+        ]
+        if has_npclient:
+            subkeys.extend([
                 r"Software\NaturalPoint\NATURALPOINT\NPClient Location",
-                0,
-                winreg.KEY_SET_VALUE,
-            )
-            winreg.SetValueEx(key, "Path", 0, winreg.REG_SZ, dll_dir + "\\")
-            winreg.CloseKey(key)
-            log.info(f"Registry: NPClient path set to {dll_dir}\\")
-        except OSError as e:
-            log.warning(f"Registry: Failed to set NPClient path: {e}")
+                r"Software\WOW6432Node\NaturalPoint\NATURALPOINT\NPClient Location",
+            ])
+
+        for subkey in subkeys:
+            try:
+                key = winreg.CreateKeyEx(
+                    winreg.HKEY_CURRENT_USER,
+                    subkey,
+                    0,
+                    winreg.KEY_SET_VALUE,
+                )
+                winreg.SetValueEx(key, "Path", 0, winreg.REG_SZ, dll_dir + "\\")
+                winreg.CloseKey(key)
+                log.info(f"Registry: {subkey} set to {dll_dir}\\")
+            except OSError as e:
+                log.warning(f"Registry: Failed to set {subkey}: {e}")

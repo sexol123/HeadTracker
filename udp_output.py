@@ -4,9 +4,10 @@ import struct
 
 log = logging.getLogger("udp_output")
 
-# Packet format: 6 floats = 24 bytes (yaw, pitch, roll, x, y, z)
-PACKET_FORMAT = "!6f"  # network byte order, 6 floats
-PACKET_SIZE = struct.calcsize(PACKET_FORMAT)
+# Standard OpenTrack UDP protocol: 6 doubles = 48 bytes (x, y, z in mm, yaw, pitch, roll in degrees)
+PACKET_FORMAT_OPENTRACK = "<6d"
+# Legacy float protocol: 6 floats = 24 bytes (yaw, pitch, roll, x, y, z)
+PACKET_FORMAT_LEGACY = "!6f"
 
 
 class UdpOutput:
@@ -39,8 +40,13 @@ class UdpOutput:
             return
 
         try:
-            data = struct.pack(PACKET_FORMAT, yaw, pitch, roll, x, y, z)
-            self._sock.sendto(data, (self._host, self._port))
+            # OpenTrack UDP protocol expects: double x, y, z, yaw, pitch, roll (48 bytes)
+            data_opentrack = struct.pack(
+                PACKET_FORMAT_OPENTRACK,
+                float(x), float(y), float(z),
+                float(yaw), float(pitch), float(roll)
+            )
+            self._sock.sendto(data_opentrack, (self._host, self._port))
         except Exception as e:
             log.error(f"UDP send error: {e}")
 

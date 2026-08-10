@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass
 import logging
 
@@ -58,7 +59,10 @@ class OneEuroFilter:
 
     @staticmethod
     def _smoothing_factor(te: float, cutoff: float) -> float:
-        tau = 1.0 / (2.0 * 3.14159265 * cutoff)
+        if cutoff <= 0:
+            return 1.0
+        te = max(te, 1e-6)
+        tau = 1.0 / (2.0 * math.pi * cutoff)
         return 1.0 / (1.0 + tau / te)
 
     def reset(self):

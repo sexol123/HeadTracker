@@ -53,7 +53,10 @@ MODEL_POINTS = np.array(
 )
 
 # MediaPipe FaceLandmarker landmark indices corresponding to MODEL_POINTS
-LANDMARK_INDICES = [1, 152, 33, 263, 61, 291]
+# Eye/mouth corner pairs are swapped: MediaPipe's 33/61 are the subject's
+# left eye/mouth (image-left for a mirrored view), the PnP model expects
+# the opposite pairing — without the swap solvePnP yields a ~180° roll.
+LANDMARK_INDICES = [1, 152, 263, 33, 291, 61]
 
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "face_landmarker.task")
 

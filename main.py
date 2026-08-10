@@ -8,9 +8,17 @@ from pathlib import Path
 os.environ.setdefault("QT_ENABLE_HIGHDPI_SCALING", "1")
 os.environ.setdefault("QT_SCALE_FACTOR_ROUNDING_POLICY", "PassThrough")
 
+# Windows explicit AppUserModelID so taskbar uses custom app icon
+if sys.platform == "win32":
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("HeadTracker.RaceSim.1.0")
+    except Exception:
+        pass
+
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QSplashScreen
-from PySide6.QtGui import QPixmap, QPainter, QColor, QFont
+from PySide6.QtGui import QPixmap, QPainter, QColor, QFont, QIcon
 
 from ui.main_window import MainWindow
 from config import load_profile, load_settings, PROFILES_DIR
@@ -18,6 +26,7 @@ from i18n import set_language, t
 
 LOGS_DIR = Path(__file__).parent / "logs"
 LOGS_DIR.mkdir(exist_ok=True)
+ICON_PATH = Path(__file__).parent / "HeadTrackerIcon.png"
 
 
 class UILogHandler(logging.Handler):
@@ -82,17 +91,34 @@ def main():
     app = QApplication(sys.argv)
     log.info("QApplication created")
 
+    if ICON_PATH.exists():
+        app_icon = QIcon(str(ICON_PATH))
+        app.setWindowIcon(app_icon)
+        log.info(f"App icon loaded from {ICON_PATH.name}")
+
     # Splash screen
     def _draw_splash(dots):
-        pix = QPixmap(400, 250)
+        pix = QPixmap(420, 280)
         pix.fill(QColor("#1a1a2e"))
         p = QPainter(pix)
+        p.setRenderHint(QPainter.Antialiasing)
+        p.setRenderHint(QPainter.SmoothPixmapTransform)
+
+        if ICON_PATH.exists():
+            icon_pix = QPixmap(str(ICON_PATH)).scaled(96, 96, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            p.drawPixmap((420 - icon_pix.width()) // 2, 20, icon_pix)
+            title_y = 120
+            status_y = 175
+        else:
+            title_y = 60
+            status_y = 130
+
         p.setPen(QColor("#00d4ff"))
-        p.setFont(QFont("Segoe UI", 24, QFont.Bold))
-        p.drawText(pix.rect().adjusted(0, 40, 0, -80), Qt.AlignCenter, "HeadTracker")
+        p.setFont(QFont("Segoe UI", 22, QFont.Bold))
+        p.drawText(pix.rect().adjusted(0, title_y, 0, -60), Qt.AlignCenter, "HeadTracker")
         p.setPen(QColor("#888888"))
         p.setFont(QFont("Segoe UI", 11))
-        p.drawText(pix.rect().adjusted(0, 150, 0, 0), Qt.AlignHCenter | Qt.AlignTop, t("splash_loading") + dots)
+        p.drawText(pix.rect().adjusted(0, status_y, 0, 0), Qt.AlignHCenter | Qt.AlignTop, t("splash_loading") + dots)
         p.end()
         return pix
 

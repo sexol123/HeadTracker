@@ -63,6 +63,7 @@ class AppSettings:
     mirror: bool = True
     camera_url: str = ""
     camera_source: str = "local"
+    camera_rotation: int = 0
     image_enhance: bool = False
     output_protocol: str = "freetrack"
     udp_host: str = "127.0.0.1"

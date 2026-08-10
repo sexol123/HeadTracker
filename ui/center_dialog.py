@@ -1,13 +1,15 @@
 import cv2
 import logging
+from pathlib import Path
 from PySide6.QtWidgets import QDialog, QLabel, QPushButton, QVBoxLayout, QHBoxLayout, QWidget, QStackedLayout
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QImage, QPixmap, QFont, QKeyEvent
+from PySide6.QtGui import QImage, QPixmap, QFont, QKeyEvent, QIcon
 
 from tracker import Pose
 from i18n import t
 
 log = logging.getLogger("center_dialog")
+ICON_PATH = Path(__file__).parent.parent / "HeadTrackerIcon.png"
 
 
 class CenterDialog(QDialog):
@@ -19,6 +21,8 @@ class CenterDialog(QDialog):
         self._current_pose = Pose()
 
         self.setWindowTitle(t("center_title"))
+        if ICON_PATH.exists():
+            self.setWindowIcon(QIcon(str(ICON_PATH)))
         self.showFullScreen()
         self.setFocusPolicy(Qt.StrongFocus)
         self.setStyleSheet("background-color: #0a0a1a;")

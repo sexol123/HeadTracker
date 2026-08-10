@@ -13,6 +13,8 @@ log = logging.getLogger("worker")
 
 
 class TrackingWorker(QThread):
+    connecting = Signal()
+    started_signal = Signal()
     frame_ready = Signal(object)
     pose_ready = Signal(object)
     confidence_ready = Signal(float)
@@ -33,36 +35,89 @@ class TrackingWorker(QThread):
 
     def start_tracking(self, profile: Profile, settings: AppSettings):
         with QMutexLocker(self._mutex):
-            if self._running:
+            if self._running or self.isRunning():
                 return
             self._profile = profile
             self._settings = settings
+            self._running = True
 
+        self.start()
+        log.info(f"Worker thread launched for profile: {profile.name}")
+
+    def update_profile(self, profile: Profile):
+        with QMutexLocker(self._mutex):
+            self._profile = profile
+
+    def run(self):
+        log.info("Worker thread starting background initialization...")
+        self.connecting.emit()
+
+        with QMutexLocker(self._mutex):
+            settings = self._settings
+            profile = self._profile
+
+        if not self._running:
+            log.info("Worker stopped before camera init")
+            self._cleanup()
+            self.stopped.emit()
+            return
+
+        # 1. Initialize Camera in background thread
         try:
             if settings.camera_source == "websocket":
                 self._camera = WebSocketCamera()
-                if not self._camera.start(url=settings.camera_url):
-                    self.error_occurred.emit(t("error_camera"))
-                    return
+                success = self._camera.start(
+                    url=settings.camera_url,
+                    mirror=settings.mirror,
+                    rotation=settings.camera_rotation,
+                    enhance=settings.image_enhance,
+                )
             else:
                 self._camera = Camera()
-                if not self._camera.start(
+                success = self._camera.start(
                     index=settings.camera_index,
                     width=settings.camera_width,
                     height=settings.camera_height,
                     fps=settings.camera_fps,
                     mirror=settings.mirror,
+                    rotation=settings.camera_rotation,
                     url=settings.camera_url,
                     enhance=settings.image_enhance,
-                ):
-                    self.error_occurred.emit(t("error_camera"))
-                    return
+                )
+        except Exception as e:
+            log.error(f"Camera init exception: {e}", exc_info=True)
+            success = False
 
+        if not success or not self._running:
+            if not self._running:
+                log.info("Worker stopped during camera init")
+            else:
+                log.error("Failed to open camera stream")
+                self.error_occurred.emit(t("error_camera"))
+            self._cleanup()
+            self.stopped.emit()
+            return
+
+        # 2. Initialize HeadTracker in background thread
+        try:
             self._tracker = HeadTracker(
                 face_hold_time=1.0,
                 confidence_threshold=0.3,
             )
+        except Exception as e:
+            log.error(f"Tracker init exception: {e}", exc_info=True)
+            self.error_occurred.emit(str(e))
+            self._cleanup()
+            self.stopped.emit()
+            return
 
+        if not self._running:
+            self._cleanup()
+            self.stopped.emit()
+            return
+
+        # 3. Initialize Output in background thread
+        try:
             if settings.output_protocol == "freetrack":
                 self._output = FreeTrackOutput()
             else:
@@ -71,23 +126,24 @@ class TrackingWorker(QThread):
             if not self._output.start():
                 self.error_occurred.emit(t("error_output").format(settings.output_protocol))
                 self._cleanup()
+                self.stopped.emit()
                 return
-
-            self._running = True
-            self.start()
-            log.info(f"Worker started: {profile.name}")
-
         except Exception as e:
-            log.error(f"Failed to start worker: {e}", exc_info=True)
+            log.error(f"Output init exception: {e}", exc_info=True)
             self.error_occurred.emit(str(e))
             self._cleanup()
+            self.stopped.emit()
+            return
 
-    def update_profile(self, profile: Profile):
-        with QMutexLocker(self._mutex):
-            self._profile = profile
+        if not self._running:
+            self._cleanup()
+            self.stopped.emit()
+            return
 
-    def run(self):
-        log.info("Worker thread running")
+        self.started_signal.emit()
+        log.info(f"Worker thread initialized — entering tracking loop for {profile.name}")
+
+        frame_count = 0
         while self._running:
             t0 = time.perf_counter()
 
@@ -99,14 +155,23 @@ class TrackingWorker(QThread):
             self._last_frame = frame
 
             with QMutexLocker(self._mutex):
-                profile = self._profile
+                prof = self._profile
 
             pose = self._tracker.process_frame(
                 frame.image, frame.timestamp, frame.width, frame.height
             )
+            frame.landmarks = self._tracker.get_last_landmarks()
             self._last_raw_pose = pose
 
-            mapped = self._apply_mapping(pose, profile)
+            mapped = self._apply_mapping(pose, prof)
+
+            frame_count += 1
+            if frame_count % 120 == 0:
+                log.debug(
+                    f"mapped conf={mapped.confidence:.2f} send={mapped.confidence >= 0.3} "
+                    f"yaw={mapped.yaw:+.1f} pitch={mapped.pitch:+.1f} roll={mapped.roll:+.1f} "
+                    f"x={mapped.x:+.1f} y={mapped.y:+.1f} z={mapped.z:+.1f}"
+                )
 
             if self._output and mapped.confidence >= 0.3:
                 self._output.send_pose(
@@ -123,12 +188,23 @@ class TrackingWorker(QThread):
             if sleep_time > 0:
                 time.sleep(sleep_time)
 
-        log.info("Worker thread exiting")
+        log.info("Worker thread exiting tracking loop")
+        self._cleanup()
         self.stopped.emit()
 
     def stop_tracking(self):
+        log.info("Requesting worker stop...")
         self._running = False
-        self.wait(3000)
+        if self._camera:
+            try:
+                self._camera.stop()
+            except Exception:
+                pass
+        if self.isRunning():
+            if not self.wait(1000):
+                log.warning("Worker thread did not terminate within 1s — forcing terminate")
+                self.terminate()
+                self.wait(500)
         self._cleanup()
         log.info("Worker stopped")
 

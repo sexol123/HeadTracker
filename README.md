@@ -5,7 +5,8 @@ Head tracking software for racing and flight simulators. Uses a regular USB webc
 ## Features
 
 - **6DOF head tracking** — Yaw, Pitch, Roll, X, Y, Z
-- **Webcam + IP camera** — USB webcams and RTSP/HTTP IP camera streams
+- **Webcam + IP + WebSocket cameras** — USB webcams, RTSP/HTTP IP streams, and phone WebSocket (MJPEG over ws) streams
+- **Camera orientation** — Rotation (0°/90°/180°/270°) and mirror for sideways-mounted cameras
 - **FreeTrack 2.0 output** — Windows shared memory (Assetto Corsa, BeamNG, ETS2, DCS, 800+ games)
 - **UDP output** — Cross-platform network output (Linux, SteamOS, macOS)
 - **Live overlay** — Face mesh, landmarks, and pose axes on camera preview
@@ -21,6 +22,7 @@ Head tracking software for racing and flight simulators. Uses a regular USB webc
 - **Button debounce** — Protection against rapid double-clicks on all buttons
 - **Localization** — English, Russian, Ukrainian, German (language selector in About tab)
 - **Multi-platform** — Windows, Linux, macOS, SteamOS
+- **System tray** — Minimize to tray, start/stop tracking and exit from the tray menu
 
 ## Quick Start
 
@@ -28,7 +30,7 @@ Head tracking software for racing and flight simulators. Uses a regular USB webc
 
 - Windows 10/11, Linux, macOS, or SteamOS
 - Python 3.9+ (3.11+ recommended)
-- USB webcam or IP camera
+- USB webcam, IP camera, or a phone with a WebSocket stream app (e.g. DroidCam/IP Webcam)
 
 ### Windows
 
@@ -98,11 +100,14 @@ python main.py -logging     # Same as -debug
 
 ## Usage
 
-1. **Select camera** — Camera tab, pick your webcam or enter IP camera URL
+1. **Select camera** — Camera tab, pick a webcam, enter an IP/WebSocket URL
 2. **Press Start** — Button turns yellow (⏳) then red (Stop), tracking begins
 3. **Select profile** — Axes tab, pick a game preset from the dropdown
 4. **Launch your game** — FreeTrack/UDP data is sent automatically
 5. **Press Stop** — Button turns green (Start), tracking stops, all values reset to zero
+
+> **Tip:** the game must be (re)started **after** tracking is running, with the same
+> user privileges as the tracker — FreeTrack games read the shared memory at startup.
 
 ### UI Layout
 
@@ -137,14 +142,30 @@ The Axes tab contains:
 
 All buttons have 800ms debounce protection against rapid clicks.
 
-### IP Camera
+### IP Camera & WebSocket
 
-For RTSP cameras:
+For RTSP/HTTP cameras:
 
 1. Camera tab → Source: `IP Camera (RTSP/HTTP)`
 2. Enter URL: `rtsp://192.168.1.100:554/stream`
 3. Press Start
 4. Stream Stats panel shows FPS, frame time, bandwidth, resolution, dropped frames
+
+For a phone used as a camera (e.g. IP Webcam, DroidCam, or a custom WebSocket stream):
+
+1. Camera tab → Source: `WebSocket`
+2. Enter URL: `ws://192.168.1.100:8080` (raw MJPEG frames or JSON with a base64 image field)
+3. Press Start — frames are received over WebSocket and tracked as usual
+
+### Camera Orientation
+
+If the camera is mounted sideways or upside down:
+
+1. Camera tab → **Rotation:** pick 90°/180°/270° until your face is upright in the preview
+2. **Mirror** flips the image horizontally (selfie-style preview)
+
+Both options are applied to the image, preview, and tracking consistently. After changing
+them, keep your head straight for a second: Yaw/Pitch/Roll should read ≈ 0.
 
 ### Low Light
 
@@ -175,6 +196,16 @@ Language selector in the About tab. Changes apply instantly without restart:
 - Camera uses V4L2 backend (Linux) or AVFoundation (macOS)
 - Face detection model downloaded by `setup.sh`
 - SteamOS: run in desktop mode for camera access
+
+### Troubleshooting
+
+| Symptom | Check |
+|---------|-------|
+| Game does not react at all | Start tracking, **then** restart the game; run both with the same privileges (both normal or both admin); make sure the game has FreeTrack/TrackIR enabled and the Output tab shows the right protocol |
+| View is upside down or jerky | Head straight → pose numbers should read ≈ 0 (not ±180°). If Roll flips between ±180°, camera rotation/mirror are misconfigured — fix in Camera tab |
+| Tracking works but values are noisy | Lower per-axis sensitivity in the Axes tab; check the Confidence field stays above 0.3 |
+| Game turns the wrong way | Toggle **Inverted** for the affected axis in the profile |
+| FreeTrack status shows an error | Run `start_debug.bat` and check `logs/` — the log shows whether shared memory and registry keys were created |
 
 ## Supported Games
 

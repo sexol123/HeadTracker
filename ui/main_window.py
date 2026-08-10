@@ -7,10 +7,10 @@ from PySide6.QtWidgets import (
     QLabel, QPushButton, QComboBox, QSpinBox, QCheckBox,
     QDoubleSpinBox, QGroupBox, QFormLayout, QSplitter,
     QTabWidget, QTextEdit, QLineEdit, QMessageBox,
-    QFileDialog, QScrollArea,
+    QFileDialog, QScrollArea, QSystemTrayIcon, QMenu,
 )
 from PySide6.QtCore import Qt, Slot, QTimer
-from PySide6.QtGui import QImage, QPixmap, QFont
+from PySide6.QtGui import QImage, QPixmap, QFont, QIcon
 
 from worker import TrackingWorker
 from camera import Camera
@@ -26,6 +26,7 @@ from config import (
 from pathlib import Path
 
 log = logging.getLogger("ui")
+ICON_PATH = Path(__file__).parent.parent / "HeadTrackerIcon.png"
 
 
 class MainWindow(QMainWindow):
@@ -55,6 +56,8 @@ class MainWindow(QMainWindow):
         self.app_settings = load_settings()
         self._pulse_splash()
         self.worker = TrackingWorker()
+        self.worker.connecting.connect(self._on_worker_connecting)
+        self.worker.started_signal.connect(self._on_worker_started)
         self.worker.frame_ready.connect(self._on_worker_frame)
         self.worker.pose_ready.connect(self._on_worker_pose)
         self.worker.confidence_ready.connect(self._on_worker_confidence)
@@ -70,7 +73,11 @@ class MainWindow(QMainWindow):
         self._current_profile_path: Path | None = None
         self._was_minimized = False
 
+        if ICON_PATH.exists():
+            self.setWindowIcon(QIcon(str(ICON_PATH)))
+
         self._init_ui()
+        self._init_tray_icon()
         self._pulse_splash()
         self._populate_profiles()
         self._pulse_splash()
@@ -93,10 +100,40 @@ class MainWindow(QMainWindow):
 
     def _debounce_end(self):
         self._btn_locked = False
-        if self.tracking_active:
-            self.btn_start.setEnabled(True)
+        self.btn_start.setEnabled(True)
+
+    def _init_tray_icon(self):
+        if not QSystemTrayIcon.isSystemTrayAvailable():
+            return
+        icon = QIcon(str(ICON_PATH)) if ICON_PATH.exists() else self.windowIcon()
+        self.tray_icon = QSystemTrayIcon(icon, self)
+        self.tray_icon.setToolTip("HeadTracker")
+
+        tray_menu = QMenu(self)
+        self._tray_action_show = tray_menu.addAction(t("tray_show"))
+        self._tray_action_show.triggered.connect(self._toggle_window_visibility)
+
+        self._tray_action_start = tray_menu.addAction(t("btn_start"))
+        self._tray_action_start.triggered.connect(self._on_start_stop)
+
+        tray_menu.addSeparator()
+        self._tray_action_exit = tray_menu.addAction(t("tray_exit"))
+        self._tray_action_exit.triggered.connect(self.close)
+
+        self.tray_icon.setContextMenu(tray_menu)
+        self.tray_icon.activated.connect(self._on_tray_icon_activated)
+        self.tray_icon.show()
+
+    def _toggle_window_visibility(self):
+        if self.isVisible() and not self.isMinimized():
+            self.hide()
         else:
-            self.btn_start.setEnabled(True)
+            self.showNormal()
+            self.activateWindow()
+
+    def _on_tray_icon_activated(self, reason):
+        if reason == QSystemTrayIcon.Trigger:
+            self._toggle_window_visibility()
 
     def _init_ui(self):
         self.setWindowTitle(t("window_title"))
@@ -199,21 +236,8 @@ class MainWindow(QMainWindow):
         self._lbl_source = QLabel(t("source"))
         form.addRow(self._lbl_source, self.combo_cam_type)
         self.combo_camera = QComboBox()
-        cameras = []
-        for i in range(5):
-            try:
-                import cv2
-                import sys
-                cap = cv2.VideoCapture(i, cv2.CAP_DSHOW) if sys.platform == "win32" else cv2.VideoCapture(i)
-                if cap.isOpened():
-                    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                    fps = int(cap.get(cv2.CAP_PROP_FPS))
-                    cameras.append({"index": i, "width": w, "height": h, "fps": fps})
-                    cap.release()
-            except Exception:
-                pass
-            self._pulse_splash()
+        cameras = Camera.list_cameras(max_count=5)
+        self._pulse_splash()
         for cam in cameras:
             self.combo_camera.addItem(
                 t("camera_item").format(cam['index'], cam['width'], cam['height']), cam["index"])
@@ -232,6 +256,13 @@ class MainWindow(QMainWindow):
         self.spin_fps = QSpinBox(); self.spin_fps.setRange(15, 120)
         self._lbl_fps_cam = QLabel(t("fps"))
         form.addRow(self._lbl_fps_cam, self.spin_fps)
+        self.combo_rotation = QComboBox()
+        self.combo_rotation.addItem("0°", 0)
+        self.combo_rotation.addItem("90°", 90)
+        self.combo_rotation.addItem("180°", 180)
+        self.combo_rotation.addItem("270°", 270)
+        self._lbl_rotation = QLabel(t("rotation"))
+        form.addRow(self._lbl_rotation, self.combo_rotation)
         self.chk_mirror = QCheckBox(t("mirror"))
         form.addRow(self.chk_mirror)
         self.chk_enhance = QCheckBox(t("enhance"))
@@ -355,6 +386,14 @@ class MainWindow(QMainWindow):
         tab = QWidget(); layout = QVBoxLayout(tab)
         layout.setAlignment(Qt.AlignCenter)
 
+        if ICON_PATH.exists():
+            logo_label = QLabel()
+            pix = QPixmap(str(ICON_PATH)).scaled(96, 96, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            logo_label.setPixmap(pix)
+            logo_label.setAlignment(Qt.AlignCenter)
+            layout.addWidget(logo_label)
+            layout.addSpacing(8)
+
         self._about_title = QLabel(t("about_title"))
         self._about_title.setFont(QFont("Segoe UI", 20, QFont.Bold))
         self._about_title.setAlignment(Qt.AlignCenter)
@@ -438,6 +477,11 @@ class MainWindow(QMainWindow):
         self.tabs.setTabText(4, t("tab_about"))
         self.lbl_status.setText(t("status_running") if self.tracking_active else t("status_stopped"))
         self.lbl_ft_status.setText(t("status_running") if self.tracking_active else t("status_not_running"))
+        # Tray actions
+        if hasattr(self, "_tray_action_show"):
+            self._tray_action_show.setText(t("tray_show"))
+            self._tray_action_start.setText(t("btn_stop") if self.tracking_active else t("btn_start"))
+            self._tray_action_exit.setText(t("tray_exit"))
         # Status tab
         self._pose_group.setTitle(t("head_pose"))
         self._lbl_yaw_title.setText(t("yaw"))
@@ -539,6 +583,10 @@ class MainWindow(QMainWindow):
         self.spin_fps.setValue(s.camera_fps)
         self.edit_url.setText(s.camera_url)
 
+        rot_idx = self.combo_rotation.findData(s.camera_rotation)
+        if rot_idx != -1:
+            self.combo_rotation.setCurrentIndex(rot_idx)
+
         if s.camera_source == "websocket":
             self.combo_cam_type.setCurrentIndex(2)
         elif s.camera_url:
@@ -577,12 +625,12 @@ class MainWindow(QMainWindow):
         self.edit_url.setVisible(is_ip or is_ws)
         self._lbl_url.setVisible(is_ip or is_ws)
         self._ip_stats_group.setVisible(is_ip or is_ws)
-        self.preview_label.setVisible(not is_ip and not is_ws)
+        self.preview_label.setVisible(True)
         if is_ws:
-            self.edit_url.setPlaceholderText("ws://192.168.1.100:8080")
+            self.edit_url.setPlaceholderText("ws://192.168.1.100:8080/ws")
             self._lbl_url.setText(t("ws_url"))
         elif is_ip:
-            self.edit_url.setPlaceholderText("rtsp://192.168.1.100:554/stream")
+            self.edit_url.setPlaceholderText("http://192.168.1.100:4444/video  or  rtsp://192.168.1.100:554/stream")
             self._lbl_url.setText(t("url"))
 
     def _on_protocol_changed(self, index):
@@ -608,6 +656,7 @@ class MainWindow(QMainWindow):
         s.camera_width = self.spin_width.value()
         s.camera_height = self.spin_height.value()
         s.camera_fps = self.spin_fps.value()
+        s.camera_rotation = self.combo_rotation.currentData() or 0
         s.mirror = self.chk_mirror.isChecked()
         s.image_enhance = self.chk_enhance.isChecked()
         if IS_WINDOWS:
@@ -662,10 +711,20 @@ class MainWindow(QMainWindow):
         self.btn_delete.setEnabled(True)
 
     # ── Tracking ─────────────────────────────────────────────────
+    @Slot()
+    def _on_worker_connecting(self):
+        self.lbl_status.setText(t("status_connecting"))
+        self.lbl_ft_status.setText(t("status_connecting"))
+
+    @Slot()
+    def _on_worker_started(self):
+        self.lbl_status.setText(t("status_running"))
+        self.lbl_ft_status.setText(t("status_running"))
+
     @Slot(object)
     def _on_worker_frame(self, frame):
         try:
-            self._last_landmarks = self.worker._tracker.get_last_landmarks() if self.worker._tracker else None
+            self._last_landmarks = getattr(frame, "landmarks", None)
             display_frame = self._draw_overlay(frame.image, self.current_pose)
             rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb.shape
@@ -700,6 +759,7 @@ class MainWindow(QMainWindow):
     @Slot(str)
     def _on_worker_error(self, msg):
         log.error(f"Worker error: {msg}")
+        self._stop_tracking()
         self.lbl_status.setText(t("status_error"))
         QMessageBox.warning(self, t("status_error"), msg)
 
@@ -720,8 +780,7 @@ class MainWindow(QMainWindow):
         self.lbl_fps.setText("0")
         self.preview_label.clear()
         self.preview_label.setText(t("camera_preview"))
-        is_ip = self.combo_cam_type.currentIndex() == 1
-        self.preview_label.setVisible(not is_ip)
+        self.preview_label.setVisible(True)
         self._set_controls_enabled(True)
         log.info("Tracking stopped")
 
@@ -777,32 +836,26 @@ class MainWindow(QMainWindow):
     def _start_tracking(self):
         self.profile = self._read_profile_from_ui()
         self._read_settings_from_ui()
-        log.info(f"Starting tracking: {self.profile.name}")
-        self.btn_start.setText("⏳")
-        self.btn_start.setStyleSheet("QPushButton { background-color: #f39c12; color: white; font-weight: bold; font-size: 16px; } QPushButton:hover { background-color: #e67e22; }")
-        self.lbl_status.setText(t("status_running"))
-        self.lbl_ft_status.setText(t("status_running"))
-        self._set_controls_enabled(False)
-        QTimer.singleShot(800, self._do_start_tracking)
-
-    def _do_start_tracking(self):
-        self.worker.start_tracking(self.profile, self.app_settings)
+        log.info(f"Starting tracking asynchronously: {self.profile.name}")
         self.tracking_active = True
         self.btn_start.setText(t("btn_stop"))
         self.btn_start.setStyleSheet("QPushButton { background-color: #e74c3c; color: white; font-weight: bold; } QPushButton:hover { background-color: #c0392b; }")
+        self.lbl_status.setText(t("status_connecting"))
+        self.lbl_ft_status.setText(t("status_connecting"))
+        self._set_controls_enabled(False)
+        self.worker.start_tracking(self.profile, self.app_settings)
 
     def _stop_tracking(self):
         log.info("Stopping tracking...")
-        self.worker.stop_tracking()
         self.tracking_active = False
+        self.worker.stop_tracking()
         self.btn_start.setText(t("btn_start"))
         self.btn_start.setStyleSheet("QPushButton { background-color: #2ecc71; color: white; font-weight: bold; } QPushButton:hover { background-color: #27ae60; }")
         self.lbl_status.setText(t("status_stopped"))
         self.lbl_ft_status.setText(t("status_not_running"))
         self.preview_label.clear()
         self.preview_label.setText(t("camera_preview"))
-        is_ip = self.combo_cam_type.currentIndex() == 1
-        self.preview_label.setVisible(not is_ip)
+        self.preview_label.setVisible(True)
         self._set_controls_enabled(True)
         log.info("Tracking stopped")
 
@@ -816,6 +869,7 @@ class MainWindow(QMainWindow):
         self.spin_width.setEnabled(enabled)
         self.spin_height.setEnabled(enabled)
         self.spin_fps.setEnabled(enabled)
+        self.combo_rotation.setEnabled(enabled)
         self.chk_mirror.setEnabled(enabled)
         self.chk_enhance.setEnabled(enabled)
         self.combo_protocol.setEnabled(enabled)

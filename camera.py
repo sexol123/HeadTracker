@@ -11,12 +11,22 @@ IS_WINDOWS = sys.platform == "win32"
 log = logging.getLogger("camera")
 
 
+def apply_clahe(frame: np.ndarray, clahe: cv2.CLAHE) -> np.ndarray:
+    """Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to enhance low-light images."""
+    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+    l = clahe.apply(l)
+    enhanced = cv2.merge([l, a, b])
+    return cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
+
+
 @dataclass
 class CameraFrame:
     image: np.ndarray
     timestamp: float
     width: int
     height: int
+    landmarks: list | None = None
 
 
 @dataclass
@@ -34,6 +44,7 @@ class Camera:
         self._cap: cv2.VideoCapture | None = None
         self._index: int = -1
         self._mirror: bool = False
+        self._rotation: int = 0
         self._url: str = ""
         self._stats = CameraStats()
         self._frame_times: list[float] = []
@@ -67,11 +78,13 @@ class Camera:
         height: int = 480,
         fps: int = 30,
         mirror: bool = False,
+        rotation: int = 0,
         url: str = "",
         enhance: bool = False,
     ) -> bool:
         self.stop()
         self._mirror = mirror
+        self._rotation = rotation
         self._url = url
         self._enhance = enhance
         self._frame_times = []
@@ -82,14 +95,44 @@ class Camera:
             log.info("Image enhancement (CLAHE) enabled")
 
         if url:
-            log.info(f"Opening IP camera: {url}")
+            url = url.strip()
+            # Normalize scheme if missing
+            if not any(url.startswith(scheme) for scheme in ("http://", "https://", "rtsp://", "udp://", "wss://", "ws://")):
+                if ":554" in url:
+                    url = "rtsp://" + url
+                else:
+                    url = "http://" + url
+                log.info(f"Auto-normalized IP camera URL to: {url}")
+
+            # Auto-append stream path if user provided only IP:port (e.g. https://192.168.178.73:4444)
+            from urllib.parse import urlparse
+            parsed = urlparse(url)
+            if not parsed.path or parsed.path == "/":
+                url = url.rstrip("/") + "/video"
+                log.info(f"Auto-appended '/video' stream endpoint: {url}")
+
+            log.info(f"Opening IP camera stream: {url}")
+            import os
+            ffmpeg_opts = []
+            if url.startswith("rtsp://"):
+                ffmpeg_opts.extend(["rtsp_transport;tcp", "stimeout;3000000"])
+            else:
+                ffmpeg_opts.extend(["timeout;3000000"])
+
             if url.startswith("https://"):
-                import os
-                os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "ssl_verify;0"
-                log.info("HTTPS detected — SSL verification disabled")
+                ffmpeg_opts.append("ssl_verify;0")
+
+            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "|".join(ffmpeg_opts)
+            log.info(f"FFmpeg options set: {os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS']}")
+
             self._cap = cv2.VideoCapture(url)
-            if not self._cap.isOpened():
-                log.error(f"Failed to open IP camera: {url}")
+            if not self._cap.isOpened() and url.endswith("/video"):
+                alt_url = url[:-6] + "/mjpeg"
+                log.info(f"Retrying stream with alternative endpoint: {alt_url}")
+                self._cap = cv2.VideoCapture(alt_url)
+
+            if not self._cap or not self._cap.isOpened():
+                log.error(f"Failed to open IP camera: {url}. Check IP address, port, and camera app.")
                 return False
             w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
@@ -160,6 +203,13 @@ class Camera:
         if read_ms > 0:
             self._stats.bandwidth_mbps = (frame_bytes * 8) / (read_ms / 1000.0) / 1_000_000
 
+        if self._rotation == 90:
+            frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+        elif self._rotation == 180:
+            frame = cv2.rotate(frame, cv2.ROTATE_180)
+        elif self._rotation == 270:
+            frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+
         if self._mirror:
             frame = cv2.flip(frame, 1)
 
@@ -167,6 +217,7 @@ class Camera:
             log.debug("CLAHE enhancement applied")
             frame = self._apply_clahe(frame)
 
+        h, w = frame.shape[:2]
         return CameraFrame(
             image=frame,
             timestamp=time.perf_counter(),
@@ -201,12 +252,7 @@ class Camera:
         return self._stats
 
     def _apply_clahe(self, frame: np.ndarray) -> np.ndarray:
-        """Apply CLAHE (Contrast Limited Adaptive Histogram Equalization) to enhance low-light images."""
-        lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
-        l, a, b = cv2.split(lab)
-        l = self._clahe.apply(l)
-        enhanced = cv2.merge([l, a, b])
-        return cv2.cvtColor(enhanced, cv2.COLOR_LAB2BGR)
+        return apply_clahe(frame, self._clahe)
 
 
 class WebSocketCamera:
@@ -217,20 +263,41 @@ class WebSocketCamera:
         self._frame: np.ndarray | None = None
         self._lock = threading.Lock()
         self._url: str = ""
+        self._mirror: bool = False
+        self._rotation: int = 0
+        self._enhance: bool = False
         self._stats = CameraStats()
+        self._frame_times: list[float] = []
+        self._drop_count: int = 0
+        self._clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
 
-    def start(self, url: str) -> bool:
+    def start(self, url: str, mirror: bool = False, rotation: int = 0, enhance: bool = False) -> bool:
         try:
             import websocket
         except ImportError:
             log.error("websocket-client library not installed. Run: pip install websocket-client")
             return False
 
+        if not url:
+            log.error("WebSocket URL is empty")
+            return False
+
+        url = url.strip()
+        if not (url.startswith("ws://") or url.startswith("wss://")):
+            url = "ws://" + url
+            log.info(f"Auto-normalized WebSocket URL to: {url}")
+
         self._url = url
+        self._mirror = mirror
+        self._rotation = rotation
+        self._enhance = enhance
         self._running = True
+        self._frame_times = []
+        self._drop_count = 0
+
         self._thread = threading.Thread(target=self._receive_loop, daemon=True)
         self._thread.start()
-        log.info(f"WebSocket camera started: {url}")
+        log.info(f"WebSocket camera thread started: {url}")
         return True
 
     def _receive_loop(self):
@@ -240,23 +307,41 @@ class WebSocketCamera:
 
         def on_message(ws, message):
             try:
+                frame = None
                 if isinstance(message, bytes):
                     buf = np.frombuffer(message, dtype=np.uint8)
                     frame = cv2.imdecode(buf, cv2.IMREAD_COLOR)
-                else:
-                    data = json.loads(message)
-                    if "image" in data:
-                        img_bytes = base64.b64decode(data["image"])
+                elif isinstance(message, str):
+                    msg_str = message.strip()
+                    if msg_str.startswith("{") and msg_str.endswith("}"):
+                        data = json.loads(msg_str)
+                        for key in ("image", "data", "frame", "jpeg", "b64", "img", "payload"):
+                            if key in data and data[key]:
+                                img_bytes = base64.b64decode(data[key])
+                                buf = np.frombuffer(img_bytes, dtype=np.uint8)
+                                frame = cv2.imdecode(buf, cv2.IMREAD_COLOR)
+                                break
+                    else:
+                        img_bytes = base64.b64decode(msg_str)
                         buf = np.frombuffer(img_bytes, dtype=np.uint8)
                         frame = cv2.imdecode(buf, cv2.IMREAD_COLOR)
-                    else:
-                        return
+
                 if frame is not None:
+                    t_now = time.perf_counter()
                     with self._lock:
                         self._frame = frame
                         self._stats.total_frames += 1
                         h, w = frame.shape[:2]
                         self._stats.resolution = f"{w}x{h}"
+
+                        self._frame_times.append(t_now)
+                        if len(self._frame_times) > 30:
+                            self._frame_times.pop(0)
+
+                        if len(self._frame_times) >= 2:
+                            dt = self._frame_times[-1] - self._frame_times[0]
+                            if dt > 0:
+                                self._stats.fps = (len(self._frame_times) - 1) / dt
             except Exception as e:
                 log.warning(f"WebSocket frame decode error: {e}")
 
@@ -268,7 +353,7 @@ class WebSocketCamera:
             self._running = False
 
         def on_open(ws):
-            log.info("WebSocket connected")
+            log.info(f"WebSocket connected successfully to {self._url}")
 
         try:
             ssl_opts = {}
@@ -291,13 +376,29 @@ class WebSocketCamera:
             log.error(f"WebSocket connection failed: {e}")
             self._running = False
 
+    def get_frame(self) -> CameraFrame | None:
+        return self.read()
+
     def read(self) -> CameraFrame | None:
         if not self._running or self._frame is None:
             return None
         with self._lock:
             frame = self._frame.copy()
+        if self._rotation == 90:
+            frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+        elif self._rotation == 180:
+            frame = cv2.rotate(frame, cv2.ROTATE_180)
+        elif self._rotation == 270:
+            frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+        if self._mirror:
+            frame = cv2.flip(frame, 1)
+        if self._enhance:
+            frame = self._apply_clahe(frame)
         h, w = frame.shape[:2]
         return CameraFrame(image=frame, timestamp=time.perf_counter(), width=w, height=h)
+
+    def _apply_clahe(self, frame: np.ndarray) -> np.ndarray:
+        return apply_clahe(frame, self._clahe)
 
     def stop(self):
         self._running = False
@@ -308,7 +409,7 @@ class WebSocketCamera:
                 pass
             self._ws = None
         if self._thread:
-            self._thread.join(timeout=2.0)
+            self._thread.join(timeout=1.0)
             self._thread = None
         self._frame = None
         self._url = ""
