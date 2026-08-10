@@ -100,6 +100,19 @@ python main.py -debug       # Debug mode (file + console logging)
 python main.py -logging     # Same as -debug
 ```
 
+## Testing
+
+Run the whole test suite (unit, synthetic PnP, UI dialogs, render pixel checks,
+live settings, real-inference smoke test):
+
+```bash
+run_tests.bat
+```
+
+Each suite is a standalone script under `tests/` (exit code 0/1); screenshots
+go to `tests/out/`. Requires the MediaPipe model (`setup.bat` downloads it) and
+`models/` present. Optionally, with pytest installed, `pytest tests/` works too.
+
 ## Usage
 
 1. **Select camera** — Camera tab, pick a webcam, enter an IP/WebSocket URL
