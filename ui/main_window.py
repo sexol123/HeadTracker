@@ -276,6 +276,9 @@ class MainWindow(QMainWindow):
         form.addRow(self.chk_mirror)
         self.chk_enhance = QCheckBox(t("enhance"))
         form.addRow(self.chk_enhance)
+        self.combo_rotation.currentIndexChanged.connect(self._on_live_setting_changed)
+        self.chk_mirror.toggled.connect(self._on_live_setting_changed)
+        self.chk_enhance.toggled.connect(self._on_live_setting_changed)
         layout.addLayout(form)
 
         self._cam_adapt_group = QGroupBox(t("cam_adaptation"))
@@ -376,6 +379,7 @@ class MainWindow(QMainWindow):
         self.slider_smoothing.setRange(0, 100)
         self.slider_smoothing.setValue(50)
         self.slider_smoothing.valueChanged.connect(self._on_smoothing_changed)
+        self.slider_smoothing.valueChanged.connect(self._on_live_setting_changed)
         self.lbl_smoothing_val = QLabel("50%")
         self.lbl_smoothing_val.setFixedWidth(40)
         smoothing_layout.addWidget(self.slider_smoothing, 1)
@@ -397,6 +401,10 @@ class MainWindow(QMainWindow):
         self.btn_delete = btn_delete
         layout.addLayout(profile_layout)
 
+        self.btn_axes_setup = QPushButton(t("axes_setup_btn"))
+        self.btn_axes_setup.clicked.connect(self._on_axes_setup)
+        layout.addWidget(self.btn_axes_setup)
+
         self._axis_widgets = {}
         self._axis_form_labels = {}
         for axis_name in ["yaw", "pitch", "roll", "x", "y", "z"]:
@@ -416,6 +424,10 @@ class MainWindow(QMainWindow):
                                                "deadzone": spin_deadzone, "inverted": chk_inverted}
             self._axis_form_labels[axis_name] = {"sensitivity": lbl_sensitivity,
                                                    "deadzone": lbl_deadzone}
+            spin_sensitivity.valueChanged.connect(lambda _, n=axis_name: self._on_axis_changed(n))
+            spin_deadzone.valueChanged.connect(lambda _, n=axis_name: self._on_axis_changed(n))
+            chk_enabled.toggled.connect(lambda _, n=axis_name: self._on_axis_changed(n))
+            chk_inverted.toggled.connect(lambda _, n=axis_name: self._on_axis_changed(n))
 
         layout.addStretch()
         scroll.setWidget(inner)
@@ -477,6 +489,10 @@ class MainWindow(QMainWindow):
             self.combo_mouse_hotkey.addItem(k.upper(), k)
         self._lbl_mouse_hotkey = QLabel(t("mouse_hotkey"))
         self._mouse_form.addRow(self._lbl_mouse_hotkey, self.combo_mouse_hotkey)
+        self.combo_mouse_mode.currentIndexChanged.connect(self._on_live_setting_changed)
+        self.spin_mouse_speed.valueChanged.connect(self._on_live_setting_changed)
+        self.combo_mouse_stop.currentIndexChanged.connect(self._on_live_setting_changed)
+        self.combo_mouse_hotkey.currentIndexChanged.connect(self._on_live_setting_changed)
         layout.addWidget(self._mouse_widget)
 
         layout.addLayout(self._output_form)
@@ -816,6 +832,12 @@ class MainWindow(QMainWindow):
     def _on_smoothing_changed(self, value):
         self.lbl_smoothing_val.setText(f"{value}%")
 
+    def _on_live_setting_changed(self, *_):
+        if not self.tracking_active:
+            return
+        self._read_settings_from_ui()
+        self.worker.update_live_settings(self.app_settings)
+
     def _on_protocol_changed(self, index):
         proto = self.combo_protocol.currentData()
         self._udp_widget.setVisible(proto == "udp")
@@ -863,6 +885,34 @@ class MainWindow(QMainWindow):
     def _on_cam_adapt_changed(self, *_):
         self._read_settings_from_ui()
         self.worker.update_calibration(self.app_settings)
+
+    def _on_axis_changed(self, axis_name, *_):
+        w = self._axis_widgets.get(axis_name)
+        if w is None:
+            return
+        ax = self.profile.axes.get(axis_name)
+        if ax is None:
+            return
+        ax.enabled = w["enabled"].isChecked()
+        ax.sensitivity = w["sensitivity"].value()
+        ax.deadzone = w["deadzone"].value()
+        ax.inverted = w["inverted"].isChecked()
+        if self.tracking_active:
+            self.worker.update_profile(self.profile)
+
+    def _on_axes_setup(self):
+        from ui.axes_helper_dialog import AxesHelperDialog
+        dlg = AxesHelperDialog(self.profile, self.worker, parent=self)
+
+        def apply_axis(name, sens, dz):
+            w = self._axis_widgets.get(name)
+            if w is None:
+                return
+            w["sensitivity"].setValue(round(sens, 1))
+            w["deadzone"].setValue(round(dz, 1))
+
+        dlg.on_axis_applied = apply_axis
+        dlg.exec()
 
     def _on_cam_center(self):
         if not self.tracking_active:
@@ -1104,7 +1154,6 @@ class MainWindow(QMainWindow):
         log.info("Tracking stopped")
 
     def _set_controls_enabled(self, enabled: bool):
-        self.combo_profile.setEnabled(enabled)
         self.btn_new.setEnabled(enabled)
         self.btn_delete.setEnabled(enabled)
         self.combo_cam_type.setEnabled(enabled)
@@ -1113,15 +1162,7 @@ class MainWindow(QMainWindow):
         self.spin_width.setEnabled(enabled)
         self.spin_height.setEnabled(enabled)
         self.spin_fps.setEnabled(enabled)
-        self.combo_rotation.setEnabled(enabled)
-        self.chk_mirror.setEnabled(enabled)
-        self.chk_enhance.setEnabled(enabled)
         self.combo_protocol.setEnabled(enabled)
-        self.combo_mouse_mode.setEnabled(enabled)
-        self.spin_mouse_speed.setEnabled(enabled)
-        self.combo_mouse_stop.setEnabled(enabled)
-        self.combo_mouse_hotkey.setEnabled(enabled)
-        self.slider_smoothing.setEnabled(enabled)
         self.edit_udp_host.setEnabled(enabled)
         self.spin_udp_port.setEnabled(enabled)
         if enabled:

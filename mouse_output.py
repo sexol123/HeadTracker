@@ -54,6 +54,12 @@ class MouseOutput:
     def update_profile(self, profile):
         self._profile = profile
 
+    def set_mode(self, mode: str):
+        self._mode = mode
+
+    def set_speed(self, speed: float):
+        self._speed = float(speed)
+
     def set_active(self, active: bool):
         active = bool(active)
         if active == self._active:

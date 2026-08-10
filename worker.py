@@ -42,9 +42,12 @@ class TrackingWorker(QThread):
         self._profile: Profile | None = None
         self._settings: AppSettings | None = None
         self._key_listener = None
+        self._last_mouse_hotkey: str | None = None
+        self._last_mouse_stop_mode: str | None = None
         self._calibration: CameraCalibration | None = None
         self._mutex = QMutex()
         self._last_raw_pose = Pose()
+        self._last_mapped_pose = Pose()
         self._last_frame: CameraFrame | None = None
 
     def start_tracking(self, profile: Profile, settings: AppSettings):
@@ -150,6 +153,8 @@ class TrackingWorker(QThread):
             elif settings.output_protocol == "mouse":
                 self._output = MouseOutput(mode=settings.mouse_mode, speed=settings.mouse_speed)
                 self._output.update_profile(profile)
+                self._last_mouse_hotkey = settings.mouse_hotkey
+                self._last_mouse_stop_mode = settings.mouse_stop_mode
                 self._start_mouse_hotkey(settings)
             else:
                 self._output = UdpOutput(host=settings.udp_host, port=settings.udp_port)
@@ -203,6 +208,7 @@ class TrackingWorker(QThread):
             self._last_raw_pose = pose
 
             mapped = self._apply_mapping(pose, prof)
+            self._last_mapped_pose = mapped
 
             frame_count += 1
             if frame_count % 120 == 0:
@@ -284,6 +290,9 @@ class TrackingWorker(QThread):
 
     def get_raw_pose(self) -> Pose:
         return self._last_raw_pose
+
+    def get_mapped_pose(self) -> Pose:
+        return self._last_mapped_pose
 
     def update_calibration(self, settings: AppSettings):
         """Live-apply camera adaptation values (called from the UI thread)."""
@@ -406,7 +415,7 @@ class TrackingWorker(QThread):
             log.error(f"Failed to start keyboard listener: {e}", exc_info=True)
             self._key_listener = None
 
-    def _cleanup(self):
+    def _stop_mouse_hotkey(self):
         if self._key_listener is not None:
             try:
                 self._key_listener.stop()
@@ -414,6 +423,42 @@ class TrackingWorker(QThread):
             except Exception as e:
                 log.warning(f"Error stopping keyboard listener: {e}")
             self._key_listener = None
+
+    def update_live_settings(self, settings: AppSettings):
+        cam = self._camera
+        if cam is not None:
+            try:
+                cam.set_image_options(
+                    mirror=settings.mirror,
+                    rotation=settings.camera_rotation,
+                    enhance=settings.image_enhance,
+                )
+            except Exception as e:
+                log.warning(f"Failed to apply image options live: {e}")
+        if self._tracker is not None:
+            try:
+                self._tracker.set_smoothing(settings.pose_smoothing)
+            except Exception as e:
+                log.warning(f"Failed to apply smoothing live: {e}")
+        if isinstance(self._output, MouseOutput):
+            try:
+                self._output.set_mode(settings.mouse_mode)
+                self._output.set_speed(settings.mouse_speed)
+            except Exception as e:
+                log.warning(f"Failed to apply mouse options live: {e}")
+            hotkey_changed = (
+                settings.mouse_hotkey != self._last_mouse_hotkey
+                or settings.mouse_stop_mode != self._last_mouse_stop_mode
+            )
+            self._last_mouse_hotkey = settings.mouse_hotkey
+            self._last_mouse_stop_mode = settings.mouse_stop_mode
+            if hotkey_changed:
+                self._stop_mouse_hotkey()
+                self._start_mouse_hotkey(settings)
+        log.debug("Live settings applied")
+
+    def _cleanup(self):
+        self._stop_mouse_hotkey()
         if self._output:
             try:
                 self._output.stop()
