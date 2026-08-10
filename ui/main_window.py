@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
     QLabel, QPushButton, QComboBox, QSpinBox, QCheckBox,
     QDoubleSpinBox, QGroupBox, QFormLayout, QSplitter,
     QTabWidget, QTextEdit, QLineEdit, QMessageBox,
-    QFileDialog, QScrollArea, QSystemTrayIcon, QMenu, QSlider,
+    QScrollArea, QSystemTrayIcon, QMenu, QSlider,
 )
 from PySide6.QtCore import Qt, Slot, QTimer
 from PySide6.QtGui import QImage, QPixmap, QFont, QIcon, QFontMetricsF
@@ -19,7 +19,7 @@ from freetrack import IS_WINDOWS
 from ui.stats_graph import StatsGraph
 from i18n import t, set_language, get_language, available_languages
 from config import (
-    Profile, AxisConfig, AppSettings,
+    Profile, AxisConfig,
     load_profile, save_profile,
     load_settings, save_settings,
     list_profiles, PROFILES_DIR,

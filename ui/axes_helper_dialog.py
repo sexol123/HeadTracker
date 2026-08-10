@@ -7,7 +7,7 @@ from PySide6.QtWidgets import (
 )
 
 from i18n import t
-from ui.cam_setup_dialog import BG_COLOR, GRID_COLOR, SCREEN_COLOR, FACE_COLOR, CAM_COLOR
+from ui.cam_setup_dialog import BG_COLOR, GRID_COLOR, SCREEN_COLOR, FACE_COLOR
 
 AXIS_NAMES = ["yaw", "pitch", "roll", "x", "y", "z"]
 AXIS_SPANS = {"yaw": 60.0, "pitch": 60.0, "roll": 60.0, "x": 50.0, "y": 50.0, "z": 50.0}

@@ -1,138 +1,84 @@
-# HeadTracker — Дорожная карта прототипа
+# HeadTracker — Дорожная карта
 
-## Цель
-Простой рабочий прототип для Windows: веб-камера → трекинг головы → FreeTrack 2.0 → игра.
+## Статус
+
+Рабочее приложение для трекинга головы (Windows/Linux/macOS): веб-камера →
+трекинг → FreeTrack 2.0 / UDP / Mouse → игра. Полный список возможностей,
+установка и использование — в `README.md`. Остатки «прототипа» (заглушки,
+устаревшие описания) устранены; этот файл описывает актуальную архитектуру и
+направление развития.
 
 ## Стек
 
-| Компонент | Технология | Лицензия |
-|-----------|-----------|----------|
-| Язык | Python 3.11+ | — |
-| Камера | OpenCV VideoCapture | Apache 2.0 |
-| Трекинг | MediaPipe FaceMesh + cv2.solvePnP() | Apache 2.0 |
-| Фильтр | Заглушка (One Euro Filter — каркас) | — |
-| GUI | PySide6 | LGPL v3 |
-| FreeTrack output | Windows shared memory через ctypes | — |
-| Конфиг | JSON | — |
+| Компонент | Технология |
+|-----------|-----------|
+| Язык | Python 3.11+ |
+| Камера | OpenCV VideoCapture (USB, RTSP/HTTP) + WebSocket (телефон) |
+| Трекинг | MediaPipe FaceLandmarker (478 лендмарков, до нескольких лиц) + cv2.solvePnP |
+| Фильтр | AdaptiveExponentialFilter (EMA, быстрый подъём / медленный спад) |
+| GUI | PySide6 |
+| Output | FreeTrack 2.0 shared memory, UDP, Mouse (velocity/absolute, pynput) |
+| Конфиг | JSON-профили + `settings.json` (атомарная запись) |
+| Тесты | автономные скрипты `tests/test_*.py`, `run_tests.bat` (offscreen UI) |
 
 ## Архитектура (pipeline)
 
 ```
-Webcam → Camera Capture → MediaPipe FaceMesh (478 landmarks)
-→ cv2.solvePnP() → Pose(yaw, pitch, roll, x, y, z)
-→ Filter (stub) → Mapping (sensitivity, deadzone, inversion)
-→ FreeTrack 2.0 shared memory → Game
+Camera (local/RTSP/WebSocket) → HeadTracker.process_frame
+→ выбор лица (несколько в кадре, ID-стабильность по центру)
+→ cv2.solvePnP → Pose(yaw, pitch, roll, x, y, z, confidence)
+→ CameraCalibration (адаптация монтажа + центр)
+→ AdaptiveExponentialFilter (smoothing)
+→ Mapping (deadzone → нелинейная кривая → ×sensitivity → инверсия)
+→ Output (FreeTrack / UDP / Mouse) → Game
 ```
 
-## Структура файлов
+Фоновый поток: `TrackingWorker` (QThread) — камера, трекинг, output, hotkey-
+слушатель; UI-поток получает кадры/позы/статистику через сигналы. Все
+live-обновления настроек — под `QMutex`.
+
+## Структура файлов (актуальная)
 
 ```
 HeadTracker/
-├── main.py                      # Точка входа
-├── pyproject.toml               # Зависимости
-├── ROADMAP.md                   # Этот файл
-├── THIRD_PARTY_LICENSES         # Лицензии зависимостей
-│
-├── camera.py                    # Захват с веб-камеры (OpenCV)
-├── tracker.py                   # MediaPipe FaceMesh → PnP → yaw/pitch/roll/x/y/z
-├── filter.py                    # Заглушка фильтра (One Euro каркас)
-├── freetrack.py                 # FreeTrack 2.0 shared memory output (ctypes)
-├── config.py                    # Загрузка/сохранение JSON конфига
-│
+├── main.py                  # Точка входа: лог, splash, CLI (--profile, --autostart)
+├── camera.py                # Камеры: local (VideoCapture), IP (RTSP/HTTP), WebSocket;
+│                            #   stall-детект (5 с), stats (FPS/bandwidth/dropped)
+├── tracker.py               # FaceLandmarker → multi-face → PnP → Pose; hold/блендинг
+├── worker.py                # TrackingWorker: поток, рестарт камеры, кривые, hotkey-комбо
+├── filter.py                # AdaptiveExponentialFilter
+├── cam_calib.py             # CameraCalibration: компенсация монтажа, центр, FOV
+├── pose.py                  # Pose (dataclass)
+├── config.py                # Profile (оси, кривые, center_pose), AppSettings,
+│                            #   save/load, атомарная запись
+├── freetrack.py             # FreeTrack 2.0 shared memory (ctypes)
+├── udp_output.py            # UDP-выход
+├── mouse_output.py          # Mouse-выход (velocity/absolute, hotkey)
+├── i18n.py                  # en/ru/uk/de
+├── crashlog.py              # Дампы падений в logs/
 ├── ui/
-│   └── main_window.py           # Главное окно: превью камеры + настройки
-│
-└── profiles/
-    ├── default.json
-    └── assetto_corsa.json
+│   ├── main_window.py       # Главное окно (вкладки Camera/Axes/Output/Log/About)
+│   ├── axes_helper_dialog.py# Визуальная настройка осей: кривая + живой тест
+│   ├── cam_setup_dialog.py  # Визуальная адаптация камеры (вид сверху/сбоку)
+│   └── stats_graph.py       # График FPS/времени кадра/задержки с маркерами
+├── tests/                   # 24 автономных сьюта (юнит, PnP, UI, рендер по пикселям)
+├── profiles/                # default.json + пресеты игр
+└── models/face_landmarker.task  # модель MediaPipe (setup.bat)
 ```
 
-## Модули
+## Куда дальше (идеи, не обязательства)
 
-### camera.py — Захват кадров
-- Enumerate камеры (индекс, разрешение, FPS)
-- start(index, width, height, fps) → открывает VideoCapture
-- get_frame() → numpy array (BGR) + timestamp
-- stop() → освобождает камеру
-- Mirror mode (отзеркаливание)
+- **Импорт/экспорт профилей (JSON)** — шаринг настроек, бэкап перед экспериментами (отложено по решению пользователя).
+- **Переключение лица кликом по превью** — сейчас выбор комбобоксом «Лицо 1/2/…», клик по рамке был бы удобнее.
+- **Фильтр One Euro / предсказание** — для игр с инерцией smoother может не хватать; перспективно, но требует аккуратного подбора параметров и тестов на латентность.
+- **Профили под hotkey** — привязать профиль к запущенной игре/горячей клавише.
+- **Низкий уровень света** — авто-порог CLAHE вместо фиксированного.
+- **Телеметрия** — экспорт логов трекинга (CSV) для анализа качества.
 
-### tracker.py — Определение положения головы
-- MediaPipe FaceMesh: 478 3D-landmarks
-- Ключевые точки для PnP: нос(1), подбородок(152), левый глаз(33), правый глаз(263), левый рот(61), правый рот(291)
-- cv2.solvePnP() → rvec, tvec
-- cv2.Rodrigues(rvec) → rotation matrix → Euler angles
-- Face loss: confidence=0, удержание последней валидной позы
-- Возврат: Pose(yaw, pitch, roll, x, y, z, confidence, timestamp)
+## Критерий успеха (актуальный)
 
-### filter.py — Заглушка фильтра
-- Каркас One Euro Filter (min_cutoff, beta)
-- Pass-through (без фильтрации на старте)
-- Интерфейс: filter_value(value, timestamp) → filtered_value
-
-### freetrack.py — FreeTrack 2.0 output
-- Windows shared memory: CreateFileMappingA("FT_SharedMem"), MapViewOfFile()
-- Мьютекс: CreateMutexA("FT_Mutext")
-- Структура FTHeap → FTData
-- Конвертация: градусы → радианы для rotation, мм для translation
-- Регистрация в реестре (HKCU\Software\Freetrack\FreetrackClient\Path)
-- start() / send_pose(pose) / stop()
-
-### config.py — Конфигурация
-- Загрузка/сохранение JSON
-- Структура профиля:
-```json
-{
-  "name": "Profile Name",
-  "camera_index": 0,
-  "camera_width": 640,
-  "camera_height": 480,
-  "camera_fps": 30,
-  "mirror": true,
-  "axes": {
-    "yaw":   { "enabled": true, "sensitivity": 6.0, "deadzone": 2.0, "inverted": false },
-    "pitch": { "enabled": true, "sensitivity": 6.0, "deadzone": 2.0, "inverted": false },
-    "roll":  { "enabled": true, "sensitivity": 6.0, "deadzone": 2.0, "inverted": false },
-    "x":     { "enabled": true, "sensitivity": 1.0, "deadzone": 1.0, "inverted": false },
-    "y":     { "enabled": true, "sensitivity": 1.0, "deadzone": 1.0, "inverted": false },
-    "z":     { "enabled": true, "sensitivity": 1.0, "deadzone": 1.0, "inverted": false }
-  },
-  "output": { "protocol": "freetrack" },
-  "hotkeys": { "center": "F12", "reset": "F11" }
-}
-```
-
-### ui/main_window.py — Интерфейс
-- PySide6 QMainWindow
-- Левая часть: превью камеры с overlay landmarks
-- Правая часть: текущие yaw/pitch/roll/x/y/z + confidence + FPS
-- Кнопки: Start/Stop, Center, Reset
-- Настройки: камера, разрешение, mirror, оси (sensitivity, deadzone, inversion)
-- Выбор профиля
-
-### profiles/*.json — Готовые профили
-- default.json — универсальные настройки
-- assetto_corsa.json — настроенные оси для AC
-
-## Горячие клавиши
-- F12 — Center (установить текущую позу как центр)
-- F11 — Reset (сбросить центр)
-
-## Порядок реализации
-
-| # | Файл | Описание |
-|---|------|----------|
-| 1 | pyproject.toml | Зависимости |
-| 2 | camera.py | Захват кадров |
-| 3 | tracker.py | MediaPipe + PnP |
-| 4 | filter.py | Заглушка фильтра |
-| 5 | freetrack.py | FreeTrack 2.0 output |
-| 6 | config.py | JSON конфиг |
-| 7 | profiles/*.json | Профили |
-| 8 | ui/main_window.py | GUI |
-| 9 | main.py | Точка входа |
-| 10 | THIRD_PARTY_LICENSES | Лицензии |
-
-## Критерий успеха
-Пользователь запускает программу → выбирает камеру → нажимает Start →
-видит превью с landmarks → запускает Assetto Corsa →
-головой осматривает кокпит (зеркала, боковые направления).
+Пользователь запускает программу → выбирает камеру → нажимает Start → видит
+превью с лендмарками → при необходимости настраивает оси/адаптацию/кривые в
+хелперах → запускает игру (FreeTrack/UDP) → голова отслеживается стабильно,
+без перескоков между людьми в кадре, с автовосстановлением после сна.
+Правки профилей/настроек не теряются даже при аварийном завершении.

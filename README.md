@@ -12,11 +12,17 @@ Head tracking software for racing and flight simulators. Uses a regular USB webc
 - **Mouse output** — Mouse-look or cursor control from head pose (velocity/absolute modes)
 - **Live overlay** — Face mesh, landmarks, and pose axes on camera preview
 - **Per-axis settings** — Sensitivity, deadzone, inversion for each axis
+- **Nonlinear response curves** — second bend point per axis (like opentrack): boost small movements without hitting the ceiling on large ones
+- **Multi-face selection** — when several people are in the frame, pick which face to track (stays locked to that person)
 - **Game presets** — Pre-configured profiles for popular simulators
-- **Profile system** — Create, delete profiles; profiles apply instantly on selection
+- **Profile system** — Create, delete profiles; profiles apply instantly on selection; center pose and response curves are stored per profile
 - **Live settings** — Profile, per-axis settings, smoothing, camera rotation/mirror/CLAHE, camera adaptation and mouse options change instantly while tracking runs
+- **Auto-save** — Settings and profile edits are saved automatically (debounced), not only on exit
+- **Camera stall recovery** — detects a dead camera stream (e.g. after sleep/hibernate) and reconnects automatically, with up to 5 retries
 - **Stream stats** — FPS, frame time, bandwidth, resolution, dropped frames for IP cameras
+- **Performance graph** — 10-second live graph of FPS/frame time/tracking latency with reconnect markers in the Log tab
 - **Error handling** — Graceful recovery with user-facing error dialogs
+- **Hotkey combos** — Mouse output hotkeys support modifiers (Ctrl/Alt/Ctrl+Shift), not just single keys
 - **Occlusion handling** — Smooth pose blending when face is partially covered
 - **Low light enhancement** — CLAHE adaptive histogram equalization
 - **High DPI support** — Proper scaling on 4K, 2K, and fractional DPI monitors (125%, 150%, 200%)
@@ -144,7 +150,7 @@ tracking.
 ┌──────────────────────────┬──────────────────────────┐
 │  Camera Preview          │  Tabs                    │
 │                          │  ┌────────────────────┐  │
-│  [Start] [Stop]          │  │ Camera / Axes /    │  │
+│  [Start] [Face: ▾]       │  │ Camera / Axes /    │  │
 │                          │  │ Output / Log /     │  │
 │  ┌───────┬─────────┐     │  │ About              │  │
 │  │ Pose  │  Info   │     │  └────────────────────┘  │
@@ -154,6 +160,12 @@ tracking.
 └──────────────────────────┴──────────────────────────┘
 ```
 
+The preview shows the face mesh, pose axes, confidence bar, current FPS, and
+numbered boxes around every detected face — the tracked face is highlighted
+yellow. When several faces are detected, the **Face** dropdown selects which
+one to track (tracking stays locked to that person even if the detection order
+changes).
+
 ### Axes Tab
 
 The Axes tab contains:
@@ -162,8 +174,11 @@ The Axes tab contains:
 - **Axes helper…** — opens a visual tuning dialog:
   - **Response curves** — one mini-plot per axis showing the input→output
     transfer function. Drag the white circles on the axis to set the deadzone,
-    drag the curve to set the sensitivity (changes apply live). The yellow dot
-    shows your current head position on the curve.
+    drag the curve to set the sensitivity (changes apply live). Drag the yellow
+    **bend handle** to shape a nonlinear curve: it adds a second point (x2, y2)
+    — the curve goes through (0,0)→(x2,y2) then continues with the sensitivity
+    slope, so you can boost small movements while keeping large ones smooth.
+    The yellow dot shows your current head position on the curve.
   - **Live test screen** — a 2D view of the X/Y output (with the deadzone
     square) and gauges for Yaw/Pitch/Roll: the white tick is the input, the
     green bar is the output after deadzone and sensitivity, so you can see the
@@ -224,8 +239,10 @@ relative to the monitor, like in commercial trackers:
   and distance read accurately. Typical webcams: 60–90°.
 - **Set center** — sit up straight facing the screen and press it while
   tracking: the current pose becomes the zero reference (rotation and
-  position). **Reset center** clears it. The center is per session, it is not
-  saved between runs.
+  position). **Reset center** clears it. Enable **Save center to profile** to
+  keep the center in the current profile — it is then applied automatically
+  whenever tracking starts with that profile (handy for different sitting
+  positions per game); the center is otherwise per session.
 - **Setup helper…** — opens a visual dialog: two schematic views (top and
   side) of the monitor, the camera and your face. Drag the camera (green) and
   the yellow rotation handle, and drag the face (cyan) to set your sitting
@@ -265,6 +282,12 @@ tune it live.
 
 The Output tab shows a **protocol log** (updates every ~60 frames) with the raw
 pose and `conf` — useful to verify tracking before launching the game.
+
+The **Log tab** shows the app log plus a **performance graph**: live FPS,
+frame time and tracking latency over the last 10 seconds. Red dashed markers
+appear when the camera stalls and reconnects (e.g. after sleep), so you can see
+the impact of image enhancement/resolution on performance. The status line also
+shows "Camera stalled — reconnecting..." while a dead stream is being restarted.
 
 ### Crash dumps
 
