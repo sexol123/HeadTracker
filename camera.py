@@ -57,6 +57,9 @@ class Camera:
         self._enhance: bool = False
         self._clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
 
+    def get_stats(self) -> CameraStats:
+        return self._stats
+
     @staticmethod
     def list_cameras(max_count: int = 10) -> list[dict]:
         cameras = []
@@ -289,6 +292,9 @@ class WebSocketCamera:
         self._drop_count: int = 0
         self._last_frame_time: float = 0.0
         self._clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+
+    def get_stats(self) -> CameraStats:
+        return self._stats
 
     def start(self, url: str, mirror: bool = False, rotation: int = 0, enhance: bool = False) -> bool:
         try:

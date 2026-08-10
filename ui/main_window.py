@@ -16,6 +16,7 @@ from worker import TrackingWorker
 from camera import Camera
 from tracker import Pose
 from freetrack import IS_WINDOWS
+from ui.stats_graph import StatsGraph
 from i18n import t, set_language, get_language, available_languages
 from config import (
     Profile, AxisConfig, AppSettings,
@@ -70,6 +71,8 @@ class MainWindow(QMainWindow):
         self.worker.frame_ready.connect(self._on_worker_frame)
         self.worker.pose_ready.connect(self._on_worker_pose)
         self.worker.faces_ready.connect(self._on_worker_faces)
+        self.worker.stats_ready.connect(self._on_worker_stats)
+        self.worker.event_marker.connect(self._on_worker_event_marker)
         self.worker.confidence_ready.connect(self._on_worker_confidence)
         self.worker.output_log.connect(self._on_protocol_log)
         self.worker.error_occurred.connect(self._on_worker_error)
@@ -548,6 +551,10 @@ class MainWindow(QMainWindow):
 
     def _build_log_tab(self):
         tab = QWidget(); layout = QVBoxLayout(tab)
+        self._perf_graph_title = QLabel(t("perf_graph"))
+        layout.addWidget(self._perf_graph_title)
+        self.stats_graph = StatsGraph()
+        layout.addWidget(self.stats_graph)
         self.log_text = QTextEdit(); self.log_text.setReadOnly(True)
         self.log_text.setFont(QFont("Consolas", 9))
         self.log_text.setStyleSheet("background-color: #1e1e1e; color: #d4d4d4;")
@@ -721,6 +728,7 @@ class MainWindow(QMainWindow):
         self._lbl_host.setText(t("host"))
         self._lbl_port.setText(t("port"))
         self._proto_log_title.setText(t("protocol_log"))
+        self._perf_graph_title.setText(t("perf_graph"))
         self._lbl_mouse_mode.setText(t("mouse_mode"))
         self._lbl_mouse_speed.setText(t("mouse_speed"))
         self.spin_mouse_speed.setToolTip(t("mouse_speed_tip"))
@@ -1142,6 +1150,17 @@ class MainWindow(QMainWindow):
         self.worker.set_face_index(index)
 
     @Slot(object)
+    def _on_worker_stats(self, stats):
+        try:
+            self.stats_graph.add_sample(*stats)
+        except Exception as e:
+            log.warning(f"Stats update error: {e}")
+
+    @Slot(str)
+    def _on_worker_event_marker(self, code):
+        self.stats_graph.add_marker(code)
+
+    @Slot(object)
     def _on_worker_pose(self, pose):
         self.current_pose = pose
         self.lbl_yaw.setText(f"{pose.yaw:+.2f}")
@@ -1202,6 +1221,7 @@ class MainWindow(QMainWindow):
         self.combo_face.clear()
         self.combo_face.setEnabled(False)
         self.combo_face.blockSignals(False)
+        self.stats_graph.clear()
         self._set_controls_enabled(True)
         try:
             self._read_settings_from_ui()
@@ -1305,6 +1325,7 @@ class MainWindow(QMainWindow):
         self.combo_face.clear()
         self.combo_face.setEnabled(False)
         self.combo_face.blockSignals(False)
+        self.stats_graph.clear()
         self._set_controls_enabled(True)
         try:
             self._read_settings_from_ui()

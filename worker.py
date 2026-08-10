@@ -52,6 +52,8 @@ class TrackingWorker(QThread):
     error_occurred = Signal(str)
     stopped = Signal()
     faces_ready = Signal(object)
+    stats_ready = Signal(object)
+    event_marker = Signal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -221,6 +223,7 @@ class TrackingWorker(QThread):
             return
 
         self.started_signal.emit()
+        self.event_marker.emit("start")
         log.info(f"Worker thread initialized — entering tracking loop for {profile.name}")
 
         frame_count = 0
@@ -241,6 +244,7 @@ class TrackingWorker(QThread):
 
             self._mark_camera_healthy()
             self._last_frame = frame
+            t_capture = time.perf_counter()
 
             with QMutexLocker(self._mutex):
                 prof = self._profile
@@ -257,6 +261,7 @@ class TrackingWorker(QThread):
                 break
             frame.landmarks = self._tracker.get_last_landmarks()
             self._last_raw_pose = pose
+            latency_ms = (time.perf_counter() - t_capture) * 1000.0
 
             mapped = self._apply_mapping(pose, prof)
             self._last_mapped_pose = mapped
@@ -316,6 +321,9 @@ class TrackingWorker(QThread):
                 self._tracker.get_selected_face_index(),
                 self._tracker.get_face_boxes(),
             ))
+            if frame_count % 10 == 0 and self._camera is not None:
+                stats = self._camera.get_stats()
+                self.stats_ready.emit((stats.fps, stats.frame_time_ms, latency_ms))
             self.frame_ready.emit(frame)
 
             elapsed = time.perf_counter() - t0
@@ -639,6 +647,7 @@ class TrackingWorker(QThread):
         self._reconnect_times.append(now)
         log.warning("Camera stalled (no frames) — restarting stream...")
         self.output_log.emit("Camera stalled — reconnecting…")
+        self.event_marker.emit("reconnect")
 
         try:
             cam.stop()
@@ -660,6 +669,7 @@ class TrackingWorker(QThread):
 
         log.info("Camera restarted successfully")
         self.output_log.emit("Camera reconnected")
+        self.event_marker.emit("reconnected")
 
     def _mark_camera_healthy(self):
         """Reset the restart budget when frames flow again."""
