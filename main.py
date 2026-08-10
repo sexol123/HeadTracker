@@ -107,6 +107,8 @@ def setup_logging(debug: bool = False):
 
 def main():
     debug = "-debug" in sys.argv or "-logging" in sys.argv
+    import crashlog
+    crashlog.install_crash_handlers(enable_faulthandler=True)
     ui_handler = setup_logging(debug=debug)
     log_bridge = LogBridge()
     log = logging.getLogger("main")

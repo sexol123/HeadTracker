@@ -1,4 +1,5 @@
 import logging
+import sys
 import time
 from PySide6.QtCore import QThread, Signal, QMutex, QMutexLocker
 
@@ -175,9 +176,16 @@ class TrackingWorker(QThread):
             with QMutexLocker(self._mutex):
                 prof = self._profile
 
-            pose = self._tracker.process_frame(
-                frame.image, frame.timestamp, frame.width, frame.height
-            )
+            try:
+                pose = self._tracker.process_frame(
+                    frame.image, frame.timestamp, frame.width, frame.height
+                )
+            except Exception as e:
+                log.critical(f"Fatal error in tracking loop: {e}", exc_info=True)
+                import crashlog
+                crashlog.write_crash_dump("Fatal error in worker tracking loop", sys.exc_info())
+                self._running = False
+                break
             frame.landmarks = self._tracker.get_last_landmarks()
             self._last_raw_pose = pose
 
@@ -193,16 +201,23 @@ class TrackingWorker(QThread):
 
             sent = False
             if self._output and mapped.confidence >= 0.3:
-                if isinstance(self._output, MouseOutput):
-                    self._output.send_pose(
-                        yaw=pose.yaw, pitch=pose.pitch, roll=pose.roll,
-                        x=pose.x, y=pose.y, z=pose.z,
-                    )
-                else:
-                    self._output.send_pose(
-                        yaw=mapped.yaw, pitch=mapped.pitch, roll=mapped.roll,
-                        x=mapped.x, y=mapped.y, z=mapped.z,
-                    )
+                try:
+                    if isinstance(self._output, MouseOutput):
+                        self._output.send_pose(
+                            yaw=pose.yaw, pitch=pose.pitch, roll=pose.roll,
+                            x=pose.x, y=pose.y, z=pose.z,
+                        )
+                    else:
+                        self._output.send_pose(
+                            yaw=mapped.yaw, pitch=mapped.pitch, roll=mapped.roll,
+                            x=mapped.x, y=mapped.y, z=mapped.z,
+                        )
+                except Exception as e:
+                    log.critical(f"Fatal error in output: {e}", exc_info=True)
+                    import crashlog
+                    crashlog.write_crash_dump("Fatal error in output", sys.exc_info())
+                    self._running = False
+                    break
                 sent = True
 
             if frame_count % 60 == 0:

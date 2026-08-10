@@ -193,6 +193,19 @@ face is lost and re-acquired.
 The Output tab shows a **protocol log** (updates every ~60 frames) with the raw
 pose and `conf` — useful to verify tracking before launching the game.
 
+### Crash dumps
+
+If the app crashes (unhandled exception, fatal error in the tracking thread, or a
+native fault in MediaPipe/OpenCV), a dump is written to the `logs/` folder with a
+filename starting with `crash`:
+
+- `crash_YYYY-MM-DD_HH-MM-SS.log` — traceback of an unhandled Python exception
+  (main thread, worker thread, or output error), with Python version, platform and CWD;
+- `crash_native_*.log` — faulthandler dump for native faults (segfault/abort).
+  Empty files are removed automatically on a clean exit.
+
+Attach these files when reporting a crash.
+
 ### Mouse
 
 Useful for games that have no FreeTrack/UDP support but accept mouse input:
