@@ -1,5 +1,6 @@
 import json
 import logging
+import os
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
@@ -105,10 +106,19 @@ def load_profile(path: str | Path) -> Profile:
         raise
 
 
+def _atomic_write_json(path: str | Path, data: dict):
+    """Write JSON atomically: temp file + os.replace, so a crash mid-write
+    never leaves a truncated file."""
+    path = Path(path)
+    tmp = path.with_name(path.name + ".tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+    os.replace(tmp, path)
+
+
 def save_profile(profile: Profile, path: str | Path):
     try:
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(profile.to_dict(), f, indent=2, ensure_ascii=False)
+        _atomic_write_json(Path(path), profile.to_dict())
         log.info(f"Profile saved: {path}")
     except PermissionError:
         log.error(f"Permission denied writing profile: {path}")
@@ -155,8 +165,7 @@ def load_settings() -> AppSettings:
 
 def save_settings(settings: AppSettings):
     try:
-        with open(SETTINGS_FILE, "w", encoding="utf-8") as f:
-            json.dump(settings.to_dict(), f, indent=2, ensure_ascii=False)
+        _atomic_write_json(SETTINGS_FILE, settings.to_dict())
         log.info(f"Settings saved: {SETTINGS_FILE}")
     except PermissionError:
         log.error(f"Permission denied writing settings: {SETTINGS_FILE}")

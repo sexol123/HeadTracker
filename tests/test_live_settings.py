@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -48,6 +49,8 @@ calls = []
 class FakeWorker:
     def update_live_settings(self, s):
         calls.append(s)
+    def update_profile(self, p):
+        pass
 win.worker = FakeWorker()
 
 win.tracking_active = False
@@ -100,5 +103,44 @@ if win.combo_profile.count() > 1:
     print("D. profile switch pushes update_profile while tracking OK")
 else:
     print("D. skipped: only one profile in list")
+
+# --- Part E: autosave — live changes schedule save, stop saves settings ---
+import ui.main_window as mw
+saved_settings = []
+saved_profiles = []
+orig_ss, orig_sp = mw.save_settings, mw.save_profile
+mw.save_settings = lambda s: saved_settings.append(s)
+mw.save_profile = lambda p, path: saved_profiles.append((p, str(path)))
+try:
+    win.worker = FakeWorker()
+    win.tracking_active = True
+    win.chk_enhance.setChecked(False)
+    app.processEvents()
+    assert win._autosave_timer.isActive(), "settings autosave timer not scheduled"
+    win._autosave_settings()
+    assert len(saved_settings) == 1
+    assert saved_settings[-1].image_enhance is False
+    print("E1. settings autosave (debounce timer -> save) OK")
+
+    win._current_profile_path = os.path.join(tempfile.gettempdir(), "ht_autosave_test.json")
+    win._axis_widgets["yaw"]["sensitivity"].setValue(7.0)
+    app.processEvents()
+    assert win._profile_autosave_timer.isActive(), "profile autosave timer not scheduled"
+    win._autosave_profile()
+    assert len(saved_profiles) == 1
+    assert saved_profiles[-1][0].axes["yaw"].sensitivity == 7.0
+    assert saved_profiles[-1][1].endswith("ht_autosave_test.json")
+    print("E2. profile autosave (axes change -> profile save) OK")
+
+    class StopWorker:
+        def stop_tracking(self):
+            pass
+    win.worker = StopWorker()
+    win.tracking_active = True
+    win._stop_tracking()
+    assert len(saved_settings) >= 2, "tracking stop did not save settings"
+    print("E3. stop saves settings OK")
+finally:
+    mw.save_settings, mw.save_profile = orig_ss, orig_sp
 
 print("ALL LIVE SETTINGS TESTS PASSED")

@@ -75,6 +75,15 @@ class MainWindow(QMainWindow):
         self._current_profile_path: Path | None = None
         self._was_minimized = False
 
+        self._autosave_timer = QTimer(self)
+        self._autosave_timer.setSingleShot(True)
+        self._autosave_timer.setInterval(2000)
+        self._autosave_timer.timeout.connect(self._autosave_settings)
+        self._profile_autosave_timer = QTimer(self)
+        self._profile_autosave_timer.setSingleShot(True)
+        self._profile_autosave_timer.setInterval(2000)
+        self._profile_autosave_timer.timeout.connect(self._autosave_profile)
+
         if ICON_PATH.exists():
             self.setWindowIcon(QIcon(str(ICON_PATH)))
 
@@ -837,6 +846,22 @@ class MainWindow(QMainWindow):
             return
         self._read_settings_from_ui()
         self.worker.update_live_settings(self.app_settings)
+        self._autosave_timer.start()
+
+    def _autosave_settings(self):
+        try:
+            self._read_settings_from_ui()
+            save_settings(self.app_settings)
+        except Exception as e:
+            log.warning(f"Autosave settings failed: {e}")
+
+    def _autosave_profile(self):
+        if not self._current_profile_path:
+            return
+        try:
+            save_profile(self.profile, self._current_profile_path)
+        except Exception as e:
+            log.warning(f"Autosave profile failed: {e}")
 
     def _on_protocol_changed(self, index):
         proto = self.combo_protocol.currentData()
@@ -885,6 +910,7 @@ class MainWindow(QMainWindow):
     def _on_cam_adapt_changed(self, *_):
         self._read_settings_from_ui()
         self.worker.update_calibration(self.app_settings)
+        self._autosave_timer.start()
 
     def _on_axis_changed(self, axis_name, *_):
         w = self._axis_widgets.get(axis_name)
@@ -899,6 +925,7 @@ class MainWindow(QMainWindow):
         ax.inverted = w["inverted"].isChecked()
         if self.tracking_active:
             self.worker.update_profile(self.profile)
+        self._profile_autosave_timer.start()
 
     def _on_axes_setup(self):
         from ui.axes_helper_dialog import AxesHelperDialog
@@ -1076,6 +1103,11 @@ class MainWindow(QMainWindow):
         self.preview_label.setText(t("camera_preview"))
         self.preview_label.setVisible(True)
         self._set_controls_enabled(True)
+        try:
+            self._read_settings_from_ui()
+            save_settings(self.app_settings)
+        except Exception as e:
+            log.warning(f"Failed to save settings on stop: {e}")
         log.info("Tracking stopped")
 
     def _draw_overlay(self, frame, pose):
@@ -1151,6 +1183,12 @@ class MainWindow(QMainWindow):
         self.preview_label.setText(t("camera_preview"))
         self.preview_label.setVisible(True)
         self._set_controls_enabled(True)
+        try:
+            self._read_settings_from_ui()
+            save_settings(self.app_settings)
+            log.info("Settings saved on tracking stop")
+        except Exception as e:
+            log.warning(f"Failed to save settings on stop: {e}")
         log.info("Tracking stopped")
 
     def _set_controls_enabled(self, enabled: bool):
