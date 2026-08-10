@@ -187,6 +187,14 @@ relative to the monitor, like in commercial trackers:
   tracking: the current pose becomes the zero reference (rotation and
   position). **Reset center** clears it. The center is per session, it is not
   saved between runs.
+- **Setup helper…** — opens a visual dialog: two schematic views (top and
+  side) of the monitor, the camera and your face. Drag the camera (green) and
+  the yellow rotation handle, and drag the face (cyan) to set your sitting
+  distance. With **Auto-aim at face** enabled, the camera tilt values are
+  computed automatically so the camera points at the face; uncheck it to
+  adjust Yaw/Pitch by hand. The roll slider and the live value readout sit
+  below the views. Every change is applied live to the settings, then fine
+  tune in the spin boxes if needed.
 
 All values apply live while tracking, so you can tune them by watching the
 Status tab (angles should read ≈ 0 when you look straight at the screen).

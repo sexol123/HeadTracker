@@ -324,6 +324,10 @@ class MainWindow(QMainWindow):
         center_layout.addWidget(self.btn_cam_center_reset)
         adapt_form.addRow(center_layout)
 
+        self.btn_cam_setup = QPushButton(t("cam_setup_btn"))
+        self.btn_cam_setup.clicked.connect(self._on_cam_setup)
+        adapt_form.addRow(self.btn_cam_setup)
+
         for sp in (self.spin_cam_offset_x, self.spin_cam_offset_y, self.spin_cam_offset_z,
                    self.spin_cam_yaw, self.spin_cam_pitch, self.spin_cam_roll, self.spin_cam_fov):
             sp.valueChanged.connect(self._on_cam_adapt_changed)
@@ -644,6 +648,7 @@ class MainWindow(QMainWindow):
         self._lbl_cam_fov.setText(t("cam_fov"))
         self.btn_cam_center.setText(t("btn_set_center"))
         self.btn_cam_center_reset.setText(t("btn_reset_center"))
+        self.btn_cam_setup.setText(t("cam_setup_btn"))
         self._ip_stats_group.setTitle(t("stream_stats"))
         self._lbl_stat_fps.setText(t("fps"))
         self._lbl_stat_ft.setText(t("frame_time"))
@@ -875,6 +880,26 @@ class MainWindow(QMainWindow):
         self.worker.reset_camera_center()
         self.lbl_status.setText(t("cam_center_reset_ok"))
         log.info("Camera center cleared")
+
+    def _on_cam_setup(self):
+        from ui.cam_setup_dialog import CamSetupDialog
+        s = self.app_settings
+        dlg = CamSetupDialog(
+            offset_x_cm=s.cam_offset_x, offset_y_cm=s.cam_offset_y, offset_z_cm=s.cam_offset_z,
+            yaw=s.cam_rotation_yaw, pitch=s.cam_rotation_pitch, roll=s.cam_rotation_roll,
+            parent=self,
+        )
+
+        def apply_vals(ox, oy, oz, yaw, pitch, roll):
+            self.spin_cam_offset_x.setValue(round(ox, 1))
+            self.spin_cam_offset_y.setValue(round(oy, 1))
+            self.spin_cam_offset_z.setValue(round(oz, 1))
+            self.spin_cam_yaw.setValue(round(yaw, 1))
+            self.spin_cam_pitch.setValue(round(pitch, 1))
+            self.spin_cam_roll.setValue(round(roll, 1))
+
+        dlg.apply_callback = apply_vals
+        dlg.exec()
 
     def _on_profile_new(self):
         self.btn_new.setEnabled(False)
