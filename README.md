@@ -168,6 +168,30 @@ If the camera is mounted sideways or upside down:
 Both options are applied to the image, preview, and tracking consistently. After changing
 them, keep your head straight for a second: Yaw/Pitch/Roll should read ≈ 0.
 
+### Camera Adaptation
+
+The camera rarely sits exactly at eye level pointing straight at your face — the
+measured pose is then skewed (a camera above the monitor adds a fake pitch, a
+camera off to the side adds yaw, and so on). The **Camera adaptation** group on
+the Camera tab compensates the mounting geometry so the pose is expressed
+relative to the monitor, like in commercial trackers:
+
+- **Camera position (cm)** — where the camera sits relative to the monitor
+  center: `X` right (+), `Y` up (+), `Z` distance from the screen toward you.
+- **Camera tilt (deg)** — how the camera is aimed: `Yaw` turned sideways,
+  `Pitch` (positive = looks down at the face), `Roll` tilted.
+- **FOV (deg)** — horizontal field of view of your camera (webcam specs or a
+  guess); `0` keeps the legacy estimate (≈53°). Correct FOV makes rotations
+  and distance read accurately. Typical webcams: 60–90°.
+- **Set center** — sit up straight facing the screen and press it while
+  tracking: the current pose becomes the zero reference (rotation and
+  position). **Reset center** clears it. The center is per session, it is not
+  saved between runs.
+
+All values apply live while tracking, so you can tune them by watching the
+Status tab (angles should read ≈ 0 when you look straight at the screen).
+Defaults (all zeros, FOV 0) keep the previous behavior exactly.
+
 ### Low Light
 
 For dim environments, enable CLAHE image enhancement:
@@ -177,7 +201,7 @@ For dim environments, enable CLAHE image enhancement:
 
 ### Smoothing
 
-Status tab → **Smoothing** slider (0–100%) applies exponential smoothing to the
+Axes tab → **Smoothing** slider (0–100%) applies exponential smoothing to the
 whole head pose (yaw/pitch/roll and position) before it is sent to any protocol.
 Higher values feel smoother but add lag; start around 50%. It is reset when the
 face is lost and re-acquired.

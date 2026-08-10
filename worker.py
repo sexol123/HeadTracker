@@ -4,7 +4,9 @@ import time
 from PySide6.QtCore import QThread, Signal, QMutex, QMutexLocker
 
 from camera import Camera, WebSocketCamera, CameraFrame
-from tracker import HeadTracker, Pose
+from tracker import HeadTracker
+from pose import Pose
+from cam_calib import CameraCalibration
 from freetrack import FreeTrackOutput
 from udp_output import UdpOutput
 from mouse_output import MouseOutput
@@ -40,6 +42,7 @@ class TrackingWorker(QThread):
         self._profile: Profile | None = None
         self._settings: AppSettings | None = None
         self._key_listener = None
+        self._calibration: CameraCalibration | None = None
         self._mutex = QMutex()
         self._last_raw_pose = Pose()
         self._last_frame: CameraFrame | None = None
@@ -113,10 +116,20 @@ class TrackingWorker(QThread):
 
         # 2. Initialize HeadTracker in background thread
         try:
+            self._calibration = CameraCalibration(
+                offset_x_cm=settings.cam_offset_x,
+                offset_y_cm=settings.cam_offset_y,
+                offset_z_cm=settings.cam_offset_z,
+                yaw=settings.cam_rotation_yaw,
+                pitch=settings.cam_rotation_pitch,
+                roll=settings.cam_rotation_roll,
+                fov=settings.camera_fov,
+            )
             self._tracker = HeadTracker(
                 face_hold_time=1.0,
                 confidence_threshold=0.3,
                 smoothing=settings.pose_smoothing,
+                calibration=self._calibration,
             )
         except Exception as e:
             log.error(f"Tracker init exception: {e}", exc_info=True)
@@ -271,6 +284,41 @@ class TrackingWorker(QThread):
 
     def get_raw_pose(self) -> Pose:
         return self._last_raw_pose
+
+    def update_calibration(self, settings: AppSettings):
+        """Live-apply camera adaptation values (called from the UI thread)."""
+        if self._calibration is None:
+            return
+        self._calibration.update(
+            offset_x_cm=settings.cam_offset_x,
+            offset_y_cm=settings.cam_offset_y,
+            offset_z_cm=settings.cam_offset_z,
+            yaw=settings.cam_rotation_yaw,
+            pitch=settings.cam_rotation_pitch,
+            roll=settings.cam_rotation_roll,
+            fov=settings.camera_fov,
+        )
+
+    def recenter_camera(self) -> bool:
+        """Capture the current pose as the neutral center. Returns True on success."""
+        if self._calibration is None or self._tracker is None:
+            return False
+        pose = self.get_raw_pose()
+        if pose.confidence < 0.3:
+            log.warning("Recenter skipped: face not tracked (conf=%.2f)", pose.confidence)
+            return False
+        self._calibration.set_center(pose.yaw, pose.pitch, pose.roll, pose.x, pose.y, pose.z)
+        log.info(
+            "Camera center set: yaw=%+.1f pitch=%+.1f roll=%+.1f x=%+.0f y=%+.0f z=%+.0f",
+            pose.yaw, pose.pitch, pose.roll, pose.x, pose.y, pose.z,
+        )
+        return True
+
+    def reset_camera_center(self):
+        if self._calibration is None:
+            return
+        self._calibration.clear_center()
+        log.info("Camera center cleared")
 
     def get_last_frame(self) -> CameraFrame | None:
         return self._last_frame
