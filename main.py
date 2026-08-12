@@ -132,6 +132,34 @@ def setup_logging(debug: bool = False):
     return ui_handler
 
 
+def draw_splash(dots: str) -> QPixmap:
+    """Splash pixmap: icon, title, and the loading line with animated dots."""
+    pix = QPixmap(420, 280)
+    pix.fill(QColor("#1a1a2e"))
+    p = QPainter(pix)
+    p.setRenderHint(QPainter.Antialiasing)
+    p.setRenderHint(QPainter.SmoothPixmapTransform)
+
+    if ICON_PATH.exists():
+        icon_pix = QPixmap(str(ICON_PATH)).scaled(96, 96, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+        p.drawPixmap((420 - icon_pix.width()) // 2, 20, icon_pix)
+        # Title sits right under the icon; the loading line must not overlap it.
+        title_area = pix.rect().adjusted(0, 118, 0, -90)
+        status_y = 205
+    else:
+        title_area = pix.rect().adjusted(0, 60, 0, -60)
+        status_y = 205
+
+    p.setPen(QColor("#00d4ff"))
+    p.setFont(QFont("Segoe UI", 22, QFont.Bold))
+    p.drawText(title_area, Qt.AlignCenter, "HeadTracker")
+    p.setPen(QColor("#888888"))
+    p.setFont(QFont("Segoe UI", 11))
+    p.drawText(pix.rect().adjusted(0, status_y, 0, 0), Qt.AlignHCenter | Qt.AlignTop, t("splash_loading") + dots)
+    p.end()
+    return pix
+
+
 def main():
     debug = "-debug" in sys.argv or "-logging" in sys.argv
     import crashlog
@@ -150,41 +178,15 @@ def main():
         app.setWindowIcon(app_icon)
         log.info(f"App icon loaded from {ICON_PATH.name}")
 
-    # Splash screen
-    def _draw_splash(dots):
-        pix = QPixmap(420, 280)
-        pix.fill(QColor("#1a1a2e"))
-        p = QPainter(pix)
-        p.setRenderHint(QPainter.Antialiasing)
-        p.setRenderHint(QPainter.SmoothPixmapTransform)
-
-        if ICON_PATH.exists():
-            icon_pix = QPixmap(str(ICON_PATH)).scaled(96, 96, Qt.KeepAspectRatio, Qt.SmoothTransformation)
-            p.drawPixmap((420 - icon_pix.width()) // 2, 20, icon_pix)
-            title_y = 120
-            status_y = 175
-        else:
-            title_y = 60
-            status_y = 130
-
-        p.setPen(QColor("#00d4ff"))
-        p.setFont(QFont("Segoe UI", 22, QFont.Bold))
-        p.drawText(pix.rect().adjusted(0, title_y, 0, -60), Qt.AlignCenter, "HeadTracker")
-        p.setPen(QColor("#888888"))
-        p.setFont(QFont("Segoe UI", 11))
-        p.drawText(pix.rect().adjusted(0, status_y, 0, 0), Qt.AlignHCenter | Qt.AlignTop, t("splash_loading") + dots)
-        p.end()
-        return pix
-
-    splash = QSplashScreen(_draw_splash("."))
+    splash = QSplashScreen(draw_splash("."))
     splash.show()
     app.processEvents()
 
     _dot_count = 0
     def _update_splash():
         nonlocal _dot_count
-        _dot_count = (_dot_count + 1) % 6
-        splash.setPixmap(_draw_splash("." * (_dot_count or 1)))
+        _dot_count = (_dot_count % 6) + 1
+        splash.setPixmap(draw_splash("." * _dot_count))
 
     from PySide6.QtCore import QTimer
     _splash_timer = QTimer()
