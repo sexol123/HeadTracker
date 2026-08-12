@@ -41,6 +41,9 @@ f = cal3.focal_length(640)
 check("fov 60 focal", near(f, 640 / 2 / np.tan(np.radians(30)), 1e-9), f"got {f:.4f}")
 cal4 = CameraCalibration(fov=0.0)
 check("fov 0 -> legacy", near(cal4.focal_length(640), 640.0, 1e-9), f"got {cal4.focal_length(640)}")
+cal_invalid_fov = CameraCalibration(fov=180.0)
+check("invalid fov -> legacy", near(cal_invalid_fov.focal_length(640), 640.0, 1e-9),
+      f"got {cal_invalid_fov.focal_length(640)}")
 
 # 4. live update changes behavior
 print("== 4. live update ==")

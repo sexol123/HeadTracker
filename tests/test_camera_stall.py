@@ -107,6 +107,19 @@ def test_websocket_read_stall():
     print("PASS: WebSocketCamera marks stalled when no frames arrive")
 
 
+def test_websocket_delivers_each_source_frame_once():
+    wsc = WebSocketCamera()
+    wsc._running = True
+    wsc._frame = np.zeros((8, 8, 3), dtype=np.uint8)
+    wsc._last_frame_time = time.perf_counter()
+    first = wsc.read()
+    second = wsc.read()
+    assert first is not None
+    assert second is None, "a WebSocket frame must not be tracked repeatedly"
+    assert first.timestamp == wsc._last_frame_time
+    print("PASS: WebSocketCamera delivers each received frame once")
+
+
 def test_worker_restarts_stalled_camera():
     w = make_worker()
     cam = FakeCam()
@@ -235,6 +248,7 @@ if __name__ == "__main__":
     test_camera_stall_flag()
     test_camera_healthy_frame_clears_flag()
     test_websocket_read_stall()
+    test_websocket_delivers_each_source_frame_once()
     test_worker_restarts_stalled_camera()
     test_worker_restart_websocket_kwargs()
     test_restart_throttle_and_limit()

@@ -1,4 +1,5 @@
 import logging
+import ssl
 import sys
 import time
 import threading
@@ -97,7 +98,7 @@ class Camera:
         self._last_frame_time = 0.0
         self._frame_count = 0
         self._drop_count = 0
-        self._stats.stalled = False
+        self._stats = CameraStats()
         if enhance:
             log.info("Image enhancement (CLAHE) enabled")
 
@@ -182,7 +183,6 @@ class Camera:
             self._stats.stalled = True
 
         try:
-            t0 = time.perf_counter()
             ret, frame = self._cap.read()
             t1 = time.perf_counter()
 
@@ -199,11 +199,11 @@ class Camera:
             return None
 
         self._frame_count += 1
-        read_ms = (t1 - t0) * 1000.0
         self._last_frame_time = time.perf_counter()
         self._stats.stalled = False
 
         # Track frame times for FPS calculation (last 30 frames)
+        previous_frame_time = self._frame_times[-1] if self._frame_times else None
         self._frame_times.append(t1)
         if len(self._frame_times) > 30:
             self._frame_times.pop(0)
@@ -214,15 +214,16 @@ class Camera:
             if dt > 0:
                 self._stats.fps = (len(self._frame_times) - 1) / dt
 
-        self._stats.frame_time_ms = read_ms
+        if previous_frame_time is not None:
+            self._stats.frame_time_ms = (t1 - previous_frame_time) * 1000.0
         self._stats.total_frames = self._frame_count
         self._stats.dropped_frames = self._drop_count
 
-        # Bandwidth estimate: frame size in bytes / read time
+        # Uncompressed BGR data rate derived from delivered FPS. It is not the
+        # compressed on-the-wire bitrate of an IP stream.
         h, w = frame.shape[:2]
         frame_bytes = w * h * 3  # BGR
-        if read_ms > 0:
-            self._stats.bandwidth_mbps = (frame_bytes * 8) / (read_ms / 1000.0) / 1_000_000
+        self._stats.bandwidth_mbps = frame_bytes * 8 * self._stats.fps / 1_000_000
 
         if self._rotation == 90:
             frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
@@ -289,8 +290,10 @@ class WebSocketCamera:
         self._enhance: bool = False
         self._stats = CameraStats()
         self._frame_times: list[float] = []
+        self._frame_sizes: list[int] = []
         self._drop_count: int = 0
         self._last_frame_time: float = 0.0
+        self._last_delivered_frame_time: float = 0.0
         self._clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
 
     def get_stats(self) -> CameraStats:
@@ -318,9 +321,11 @@ class WebSocketCamera:
         self._enhance = enhance
         self._running = True
         self._frame_times = []
+        self._frame_sizes = []
         self._drop_count = 0
         self._last_frame_time = 0.0
-        self._stats.stalled = False
+        self._last_delivered_frame_time = 0.0
+        self._stats = CameraStats()
 
         self._thread = threading.Thread(target=self._receive_loop, daemon=True)
         self._thread.start()
@@ -343,7 +348,9 @@ class WebSocketCamera:
         def on_message(ws, message):
             try:
                 frame = None
+                encoded_size = 0
                 if isinstance(message, bytes):
+                    encoded_size = len(message)
                     buf = np.frombuffer(message, dtype=np.uint8)
                     frame = cv2.imdecode(buf, cv2.IMREAD_COLOR)
                 elif isinstance(message, str):
@@ -353,11 +360,13 @@ class WebSocketCamera:
                         for key in ("image", "data", "frame", "jpeg", "b64", "img", "payload"):
                             if key in data and data[key]:
                                 img_bytes = base64.b64decode(data[key])
+                                encoded_size = len(img_bytes)
                                 buf = np.frombuffer(img_bytes, dtype=np.uint8)
                                 frame = cv2.imdecode(buf, cv2.IMREAD_COLOR)
                                 break
                     else:
                         img_bytes = base64.b64decode(msg_str)
+                        encoded_size = len(img_bytes)
                         buf = np.frombuffer(img_bytes, dtype=np.uint8)
                         frame = cv2.imdecode(buf, cv2.IMREAD_COLOR)
 
@@ -372,13 +381,17 @@ class WebSocketCamera:
                         self._stats.resolution = f"{w}x{h}"
 
                         self._frame_times.append(t_now)
+                        self._frame_sizes.append(encoded_size)
                         if len(self._frame_times) > 30:
                             self._frame_times.pop(0)
+                            self._frame_sizes.pop(0)
 
                         if len(self._frame_times) >= 2:
                             dt = self._frame_times[-1] - self._frame_times[0]
                             if dt > 0:
                                 self._stats.fps = (len(self._frame_times) - 1) / dt
+                                self._stats.frame_time_ms = (self._frame_times[-1] - self._frame_times[-2]) * 1000.0
+                                self._stats.bandwidth_mbps = sum(self._frame_sizes) * 8 / dt / 1_000_000
             except Exception as e:
                 log.warning(f"WebSocket frame decode error: {e}")
 
@@ -393,10 +406,6 @@ class WebSocketCamera:
             log.info(f"WebSocket connected successfully to {self._url}")
 
         try:
-            ssl_opts = {}
-            if self._url.startswith("wss://"):
-                ssl_opts = {"cert_reqs": 0}
-                log.info("WSS detected — SSL verification disabled")
             ws = websocket.WebSocketApp(
                 self._url,
                 on_message=on_message,
@@ -405,10 +414,9 @@ class WebSocketCamera:
                 on_open=on_open,
             )
             self._ws = ws
-            if ssl_opts:
-                ws.run_forever(sslopt=ssl_opts)
-            else:
-                ws.run_forever()
+            # ws:// is plaintext and has no TLS layer. For wss://, deliberately
+            # accept self-signed camera certificates as requested by the user.
+            ws.run_forever(sslopt={"cert_reqs": ssl.CERT_NONE, "check_hostname": False})
         except Exception as e:
             log.error(f"WebSocket connection failed: {e}")
             self._running = False
@@ -424,6 +432,10 @@ class WebSocketCamera:
             return None
         with self._lock:
             frame = self._frame.copy()
+            frame_time = self._last_frame_time
+        if frame_time <= self._last_delivered_frame_time:
+            return None
+        self._last_delivered_frame_time = frame_time
         self._stats.stalled = False
         if self._rotation == 90:
             frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
@@ -436,7 +448,7 @@ class WebSocketCamera:
         if self._enhance:
             frame = self._apply_clahe(frame)
         h, w = frame.shape[:2]
-        return CameraFrame(image=frame, timestamp=time.perf_counter(), width=w, height=h)
+        return CameraFrame(image=frame, timestamp=frame_time, width=w, height=h)
 
     def _apply_clahe(self, frame: np.ndarray) -> np.ndarray:
         return apply_clahe(frame, self._clahe)

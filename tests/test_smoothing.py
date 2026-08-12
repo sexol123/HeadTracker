@@ -35,4 +35,19 @@ ft._apply_smoothing(Pose(yaw=0.0, pitch=0.0, roll=0.0))
 p5 = ft._apply_smoothing(Pose(yaw=10.0, pitch=20.0, roll=30.0))
 assert abs(p5.yaw - 3.0) < 1e-6 and abs(p5.pitch - 6.0) < 1e-6 and abs(p5.roll - 9.0) < 1e-6, p5
 print("per-axis independent OK:", p5.yaw, p5.pitch, p5.roll)
+
+# Confidence blending must compare the new pose to the *previous* output.
+# A regression used to update _last_valid_pose before calling _build_pose,
+# making the blend inputs identical and silently disabling the blend.
+ft = FakeTracker(0.0)
+ft._last_valid_pose = Pose(yaw=10.0, pitch=-10.0, x=100.0)
+blended = ft._build_pose(
+    0.25,
+    timestamp=1.0,
+    raw_pose=Pose(yaw=30.0, pitch=10.0, x=300.0),
+)
+assert abs(blended.yaw - 15.0) < 1e-6
+assert abs(blended.pitch - (-5.0)) < 1e-6
+assert abs(blended.x - 150.0) < 1e-6
+print("confidence blend uses previous pose OK")
 print("SMOOTHING TESTS PASSED")

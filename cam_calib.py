@@ -114,7 +114,9 @@ class CameraCalibration:
         legacy focal = camera_width (~53° horizontal for 16:9)."""
         with self._lock:
             fov = self._fov
-        if fov > 0:
+        # The UI limits FOV to 120°, but settings can also be edited by hand.
+        # Values at/over 180° make the pinhole focal-length formula degenerate.
+        if 0.0 < fov < 179.0:
             return (camera_width / 2.0) / math.tan(math.radians(fov) / 2.0)
         return float(camera_width)
 

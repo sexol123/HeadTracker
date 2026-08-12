@@ -3,6 +3,9 @@ from dataclasses import dataclass
 
 @dataclass
 class Pose:
+    """Head pose with angles in degrees, translation in millimetres, and a
+    monotonic timestamp in seconds. These are the units used by PnP, mapping,
+    FreeTrack, and UDP output throughout the application."""
     yaw: float = 0.0
     pitch: float = 0.0
     roll: float = 0.0

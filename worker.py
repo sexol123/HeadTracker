@@ -29,10 +29,15 @@ RECONNECT_INTERVAL = 3.0     # minimum time between restart attempts
 def _apply_curve(v, sens, curve):
     """Piecewise response curve shared with ui.axes_helper_dialog.axis_curve:
     (0,0) -> (x2,y2) -> slope=sens. curve=None keeps linear mapping."""
-    if not curve or len(curve) < 2 or float(curve[0]) <= 0:
+    try:
+        if not curve or len(curve) < 2:
+            return v * sens
+        x2 = float(curve[0])
+        if x2 <= 0:
+            return v * sens
+        y2 = max(0.0, float(curve[1]))
+    except (TypeError, ValueError, KeyError, IndexError):
         return v * sens
-    x2 = float(curve[0])
-    y2 = max(0.0, float(curve[1]))
     sign = 1.0 if v >= 0 else -1.0
     a = abs(v)
     if a <= x2:
@@ -53,6 +58,7 @@ class TrackingWorker(QThread):
     stopped = Signal()
     faces_ready = Signal(object)
     stats_ready = Signal(object)
+    diagnostics_ready = Signal(object)
     event_marker = Signal(str)
 
     def __init__(self, parent=None):
@@ -72,6 +78,8 @@ class TrackingWorker(QThread):
         self._calibration: CameraCalibration | None = None
         self._mutex = QMutex()
         self._last_raw_pose = Pose()
+        self._last_pnp_pose = Pose()
+        self._last_calibrated_pose = Pose()
         self._last_mapped_pose = Pose()
         self._last_frame: CameraFrame | None = None
         self._face_index: int = 0
@@ -261,6 +269,8 @@ class TrackingWorker(QThread):
                 break
             frame.landmarks = self._tracker.get_last_landmarks()
             self._last_raw_pose = pose
+            self._last_pnp_pose = self._tracker.get_last_pnp_pose()
+            self._last_calibrated_pose = self._tracker.get_last_calibrated_pose()
             latency_ms = (time.perf_counter() - t_capture) * 1000.0
 
             mapped = self._apply_mapping(pose, prof)
@@ -275,7 +285,16 @@ class TrackingWorker(QThread):
                 )
 
             sent = False
-            if self._output and mapped.confidence >= 0.3:
+            if self._output is None:
+                send_reason = "output unavailable"
+                send_state = "output_unavailable"
+            elif mapped.confidence < 0.3:
+                send_reason = f"confidence {mapped.confidence:.2f} < 0.30"
+                send_state = "low_confidence"
+            elif isinstance(self._output, MouseOutput) and not self._output.is_active():
+                send_reason = "mouse output paused"
+                send_state = "mouse_paused"
+            else:
                 try:
                     if isinstance(self._output, MouseOutput):
                         self._output.send_pose(
@@ -294,12 +313,14 @@ class TrackingWorker(QThread):
                     self._running = False
                     break
                 sent = True
+                send_reason = "sent"
+                send_state = "sent"
 
             if frame_count % 60 == 0:
-                if not sent:
-                    line = f"{proto_tag} » no send: conf={mapped.confidence:.2f} (< 0.3)"
-                elif isinstance(self._output, MouseOutput) and not self._output.is_active():
+                if isinstance(self._output, MouseOutput) and not self._output.is_active():
                     line = f"Mouse » paused ({self._settings.mouse_hotkey if self._settings else '?'})"
+                elif not sent:
+                    line = f"{proto_tag} » no send: {send_reason}"
                 elif isinstance(self._output, MouseOutput):
                     line = (
                         f"Mouse » yaw={pose.yaw:+.1f}° pitch={pose.pitch:+.1f}° "
@@ -317,6 +338,14 @@ class TrackingWorker(QThread):
 
             self.confidence_ready.emit(mapped.confidence)
             self.pose_ready.emit(mapped)
+            if frame_count % 5 == 0:
+                self.diagnostics_ready.emit({
+                    "pnp": self._last_pnp_pose,
+                    "calibrated": self._last_calibrated_pose,
+                    "mapped": mapped,
+                    "send_reason": send_reason,
+                    "send_state": send_state,
+                })
             self.faces_ready.emit((
                 self._tracker.get_selected_face_index(),
                 self._tracker.get_face_boxes(),

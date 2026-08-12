@@ -66,6 +66,8 @@ class HeadTracker:
             log.error(f"Failed to initialize FaceLandmarker: {e}", exc_info=True)
             raise RuntimeError(f"Failed to initialize face tracking model: {e}") from e
         self._last_valid_pose = Pose()
+        self._last_pnp_pose = Pose()
+        self._last_calibrated_pose = Pose()
         self._face_lost_time: float = 0.0
         self._face_hold_time: float = face_hold_time
         self._confidence_threshold: float = confidence_threshold
@@ -93,6 +95,14 @@ class HeadTracker:
 
     def get_last_landmarks(self):
         return self._last_landmarks
+
+    def get_last_pnp_pose(self) -> Pose:
+        """Most recent pose directly from solvePnP (degrees, millimetres)."""
+        return self._last_pnp_pose.copy()
+
+    def get_last_calibrated_pose(self) -> Pose:
+        """Pose after camera compensation, before smoothing and axis mapping."""
+        return self._last_calibrated_pose.copy()
 
     def set_face_index(self, index: int):
         """Select which detected face to track (0-based, clamped)."""
@@ -280,18 +290,27 @@ class HeadTracker:
             confidence=visibility_ratio,
             timestamp=timestamp,
         )
+        self._last_pnp_pose = raw_pose.copy()
 
         if self._calibration is not None:
             raw_pose = self._calibration.apply(raw_pose)
+        self._last_calibrated_pose = raw_pose.copy()
 
         raw_pose = self._apply_smoothing(raw_pose)
-
-        self._last_valid_pose = raw_pose
 
         # Blend with last valid pose based on confidence
         # Low confidence = more of last_valid_pose, high = more of current
         conf = self._confidence_smoother(visibility_ratio, timestamp)
-        return self._build_pose(conf, timestamp, raw_pose)
+        pose = self._build_pose(
+            conf,
+            timestamp,
+            raw_pose if visibility_ratio >= self._confidence_threshold else None,
+        )
+        # Keep the blended output as the next frame's reference.  Updating this
+        # before _build_pose would make both blend inputs identical.
+        if visibility_ratio >= self._confidence_threshold:
+            self._last_valid_pose = pose.copy()
+        return pose
 
     def _build_pose(
         self,

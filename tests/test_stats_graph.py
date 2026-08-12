@@ -9,6 +9,7 @@ from PySide6.QtWidgets import QApplication
 from ui.stats_graph import StatsGraph, WINDOW_SEC
 from ui.main_window import MainWindow
 from i18n import t
+from pose import Pose
 
 app = QApplication([])
 
@@ -81,6 +82,22 @@ def test_ui_title_i18n():
     print("PASS: performance graph title localized")
 
 
+def test_diagnostics_show_pipeline_and_block_reason():
+    win = MainWindow(Profile())
+    win._on_worker_diagnostics({
+        "pnp": Pose(yaw=1.0, x=10.0),
+        "calibrated": Pose(yaw=2.0, x=20.0),
+        "mapped": Pose(yaw=12.0, x=120.0, confidence=0.10),
+        "send_reason": "confidence 0.10 < 0.30",
+        "send_state": "low_confidence",
+    })
+    assert "Y +1.00°" in win._diagnostic_values["diagnostics_pnp"].text()
+    assert "Y +2.00°" in win._diagnostic_values["diagnostics_calibrated"].text()
+    assert "Y +12.00°" in win._diagnostic_values["diagnostics_mapped"].text()
+    assert "Blocked: confidence 0.10 < 0.30" == win._diagnostic_values["diagnostics_output"].text()
+    print("PASS: diagnostics show pipeline stages and output block reason")
+
+
 from config import Profile  # noqa: E402
 
 if __name__ == "__main__":
@@ -89,4 +106,5 @@ if __name__ == "__main__":
     test_paint_does_not_crash()
     test_ui_integration()
     test_ui_title_i18n()
+    test_diagnostics_show_pipeline_and_block_reason()
     print("STATS GRAPH TESTS PASSED")

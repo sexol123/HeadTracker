@@ -52,7 +52,7 @@ def test_curve_with_deadzone_and_inverted():
 
 
 def test_bad_curve_falls_back_to_linear():
-    for bad in ([0.0, 5.0], [1.0], [], "x"):
+    for bad in ([0.0, 5.0], [1.0], [], "x", ["bad", 5.0], {"x": 5.0}):
         assert abs(axis_curve(10, 6, 0, False, bad) - 60.0) < 1e-9, bad
     assert abs(_apply_curve(10.0, 6.0, [0.0, 5.0]) - 60.0) < 1e-9
     assert abs(_apply_curve(10.0, 6.0, []) - 60.0) < 1e-9

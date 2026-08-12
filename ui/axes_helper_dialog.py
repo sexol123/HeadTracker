@@ -28,8 +28,12 @@ def axis_curve(x, sens, dz, inverted, curve=None):
     s = -1.0 if inverted else 1.0
     v = s * x
     a = abs(v)
-    if curve and len(curve) >= 2 and float(curve[0]) > 0:
-        x2, y2 = float(curve[0]), max(0.0, float(curve[1]))
+    try:
+        x2 = float(curve[0]) if curve and len(curve) >= 2 else 0.0
+        y2 = max(0.0, float(curve[1])) if x2 > 0.0 else 0.0
+    except (TypeError, ValueError, KeyError, IndexError):
+        x2, y2 = 0.0, 0.0
+    if x2 > 0.0:
         if a <= x2:
             out = y2 / x2 * v
         else:

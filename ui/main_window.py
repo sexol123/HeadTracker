@@ -72,6 +72,7 @@ class MainWindow(QMainWindow):
         self.worker.pose_ready.connect(self._on_worker_pose)
         self.worker.faces_ready.connect(self._on_worker_faces)
         self.worker.stats_ready.connect(self._on_worker_stats)
+        self.worker.diagnostics_ready.connect(self._on_worker_diagnostics)
         self.worker.event_marker.connect(self._on_worker_event_marker)
         self.worker.confidence_ready.connect(self._on_worker_confidence)
         self.worker.output_log.connect(self._on_protocol_log)
@@ -555,6 +556,19 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._perf_graph_title)
         self.stats_graph = StatsGraph()
         layout.addWidget(self.stats_graph)
+        self._diagnostics_group = QGroupBox(t("diagnostics"))
+        diagnostics_form = QFormLayout(self._diagnostics_group)
+        self._diagnostic_titles = {}
+        self._diagnostic_values = {}
+        for key in ("diagnostics_pnp", "diagnostics_calibrated", "diagnostics_mapped", "diagnostics_output"):
+            title = QLabel(t(key))
+            value = QLabel("--")
+            value.setFont(QFont("Consolas", 9))
+            value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            diagnostics_form.addRow(title, value)
+            self._diagnostic_titles[key] = title
+            self._diagnostic_values[key] = value
+        layout.addWidget(self._diagnostics_group)
         self.log_text = QTextEdit(); self.log_text.setReadOnly(True)
         self.log_text.setFont(QFont("Consolas", 9))
         self.log_text.setStyleSheet("background-color: #1e1e1e; color: #d4d4d4;")
@@ -735,6 +749,9 @@ class MainWindow(QMainWindow):
         self._lbl_port.setText(t("port"))
         self._proto_log_title.setText(t("protocol_log"))
         self._perf_graph_title.setText(t("perf_graph"))
+        self._diagnostics_group.setTitle(t("diagnostics"))
+        for key, label in self._diagnostic_titles.items():
+            label.setText(t(key))
         self._lbl_mouse_mode.setText(t("mouse_mode"))
         self._lbl_mouse_speed.setText(t("mouse_speed"))
         self.spin_mouse_speed.setToolTip(t("mouse_speed_tip"))
@@ -1185,6 +1202,40 @@ class MainWindow(QMainWindow):
         except Exception as e:
             log.warning(f"Stats update error: {e}")
 
+    @staticmethod
+    def _format_diagnostic_pose(pose):
+        return (
+            f"Y {pose.yaw:+.2f}°  P {pose.pitch:+.2f}°  R {pose.roll:+.2f}°"
+            f"   X {pose.x:+.1f} mm  Y {pose.y:+.1f} mm  Z {pose.z:+.1f} mm"
+        )
+
+    @Slot(object)
+    def _on_worker_diagnostics(self, diagnostics):
+        try:
+            self._diagnostic_values["diagnostics_pnp"].setText(
+                self._format_diagnostic_pose(diagnostics["pnp"])
+            )
+            self._diagnostic_values["diagnostics_calibrated"].setText(
+                self._format_diagnostic_pose(diagnostics["calibrated"])
+            )
+            self._diagnostic_values["diagnostics_mapped"].setText(
+                self._format_diagnostic_pose(diagnostics["mapped"])
+            )
+            state = diagnostics.get("send_state", diagnostics["send_reason"])
+            if state == "sent":
+                status = t("diagnostics_sent")
+            elif state == "low_confidence":
+                status = t("diagnostics_low_confidence", diagnostics["mapped"].confidence)
+            elif state == "mouse_paused":
+                status = t("diagnostics_mouse_paused")
+            elif state == "output_unavailable":
+                status = t("diagnostics_output_unavailable")
+            else:
+                status = f"Blocked: {diagnostics['send_reason']}"
+            self._diagnostic_values["diagnostics_output"].setText(status)
+        except (KeyError, TypeError, AttributeError) as e:
+            log.warning(f"Diagnostics update error: {e}")
+
     @Slot(str)
     def _on_worker_event_marker(self, code):
         self.stats_graph.add_marker(code)
@@ -1243,6 +1294,8 @@ class MainWindow(QMainWindow):
         self.lbl_yaw.setText("0.00")
         self.lbl_pitch.setText("0.00")
         self.lbl_roll.setText("0.00")
+        for value in self._diagnostic_values.values():
+            value.setText("--")
         self.lbl_x.setText("0.00")
         self.lbl_y.setText("0.00")
         self.lbl_z.setText("0.00")

@@ -41,4 +41,36 @@ assert s2.mouse_speed == 99.0 and s2.cam_offset_x == -12.5
 assert isinstance(s2.first_run, bool)
 print("4. AppSettings roundtrip OK")
 
+# 5. Invalid external JSON is normalized before it reaches the worker/UI.
+bad_profile = Profile.from_dict({
+    "name": 42,
+    "axes": {
+        "yaw": {"sensitivity": 999, "deadzone": -5, "enabled": "yes", "curve": ["bad", float("inf")]},
+        "pitch": {"sensitivity": 4.0, "deadzone": 3.0, "curve": [20, 60]},
+    },
+    "center_pose": {"yaw": 0, "pitch": 0, "roll": 0, "x": 0, "y": 0, "z": float("nan")},
+})
+assert bad_profile.name == "Default"
+assert bad_profile.axes["yaw"].sensitivity == 6.0
+assert bad_profile.axes["yaw"].deadzone == 2.0
+assert bad_profile.axes["yaw"].curve is None
+assert bad_profile.axes["pitch"].curve == [20.0, 60.0]
+assert bad_profile.center_pose is None
+
+bad_settings = AppSettings.from_dict({
+    "camera_fov": 180,
+    "udp_port": 70000,
+    "udp_host": "bad host name",
+    "camera_url": "https://",
+    "camera_rotation": 45,
+    "pose_smoothing": -1,
+})
+assert bad_settings.camera_fov == 0.0
+assert bad_settings.udp_port == 4242
+assert bad_settings.udp_host == "127.0.0.1"
+assert bad_settings.camera_url == ""
+assert bad_settings.camera_rotation == 0
+assert bad_settings.pose_smoothing == 0.5
+print("5. invalid JSON values normalized safely")
+
 print("ALL CONFIG TESTS PASSED")

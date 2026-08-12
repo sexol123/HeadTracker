@@ -37,7 +37,7 @@ Head tracking software for racing and flight simulators. Uses a regular USB webc
 ### Requirements
 
 - Windows 10/11, Linux, macOS, or SteamOS
-- Python 3.9+ (3.11+ recommended)
+- Python 3.11+
 - USB webcam, IP camera, or a phone with a WebSocket stream app (e.g. DroidCam/IP Webcam)
 
 ### Windows
@@ -51,7 +51,7 @@ setup.bat
 Or install manually:
 
 ```bash
-python -m pip install mediapipe opencv-python PySide6 numpy pynput
+python -m pip install mediapipe opencv-python PySide6 numpy pynput websocket-client
 ```
 
 ### Linux / SteamOS
@@ -64,7 +64,7 @@ chmod +x setup.sh
 Or install manually:
 
 ```bash
-python3 -m pip install mediapipe opencv-python PySide6 numpy pynput
+python3 -m pip install mediapipe opencv-python PySide6 numpy pynput websocket-client
 ```
 
 ### Run
@@ -374,6 +374,22 @@ Any game that supports FreeTrack or TrackIR protocol:
 ### Linux / SteamOS (UDP)
 
 Use UDP output in games that support UDP head tracking (e.g., through opentrack UDP receiver).
+
+### Units and diagnostics
+
+The tracker uses these units consistently throughout the processing pipeline:
+
+- **Yaw, pitch, roll:** degrees (°).
+- **X, Y, Z head translation:** millimetres (mm), produced by PnP and sent to FreeTrack/UDP.
+- **Camera placement fields:** centimetres (cm) in the UI and settings; converted to millimetres internally.
+- **Camera FOV:** horizontal degrees; `0` uses the legacy automatic focal-length estimate.
+- **Image geometry:** pixels (px); stream rate is frames per second (FPS); frame time and tracking latency are milliseconds (ms).
+- **Mouse output:** velocity mode uses pixels/second per degree, absolute mode uses pixels per degree.
+
+The **Log** tab includes a Diagnostics block while tracking: raw PnP pose, pose after
+camera calibration, mapped output pose, and the exact output state. If data is not
+sent, it shows whether confidence is below `0.30`, the output is unavailable, or mouse
+output is paused.
 
 ## Architecture
 

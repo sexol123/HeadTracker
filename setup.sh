@@ -9,7 +9,7 @@ if command -v python3 &>/dev/null; then
 elif command -v python &>/dev/null; then
     PYTHON=python
 else
-    echo "[ERROR] Python 3 not found. Please install Python 3.9+."
+    echo "[ERROR] Python 3.11+ not found. Please install Python 3.11 or newer."
     echo "  Ubuntu/Debian: sudo apt install python3 python3-pip python3-venv"
     echo "  Fedora: sudo dnf install python3 python3-pip"
     echo "  Arch: sudo pacman -S python python-pip"
