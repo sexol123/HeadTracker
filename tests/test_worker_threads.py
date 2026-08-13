@@ -36,6 +36,7 @@ w._process_hotkey_request()
 assert w._key_listener is not None, "worker-thread apply must start listener"
 assert w._hotkey_request is None
 w._stop_mouse_hotkey()
+w._tracker.close()  # explicit close: GC-triggered FaceLandmarker.__del__ can deadlock
 print("1. hotkey restart deferred to worker thread OK")
 
 # --- 2. repeated identical live calls do not queue extra requests ---
@@ -50,6 +51,7 @@ assert w._hotkey_request is not None
 w._process_hotkey_request()
 assert w._hotkey_request is None and w._key_listener is not None
 w._stop_mouse_hotkey()
+w._cleanup()
 print("2. change detection (only one pending request) OK")
 
 # --- 3. stress: UI-thread writer vs worker-thread applier ---

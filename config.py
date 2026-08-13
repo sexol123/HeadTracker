@@ -202,7 +202,7 @@ class AppSettings:
     mouse_speed: float = 25.0
     mouse_stop_mode: str = "hold"
     mouse_hotkey: str = "f8"
-    pose_smoothing: float = 0.5
+    pose_smoothing: float = 0.6
 
     def to_dict(self) -> dict:
         return asdict(self)

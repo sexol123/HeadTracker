@@ -70,7 +70,7 @@ assert bad_settings.udp_port == 4242
 assert bad_settings.udp_host == "127.0.0.1"
 assert bad_settings.camera_url == ""
 assert bad_settings.camera_rotation == 0
-assert bad_settings.pose_smoothing == 0.5
+assert bad_settings.pose_smoothing == 0.6
 print("5. invalid JSON values normalized safely")
 
 print("ALL CONFIG TESTS PASSED")

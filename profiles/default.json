@@ -1,11 +1,11 @@
 {
   "name": "Default",
   "axes": {
-    "yaw": { "enabled": true, "sensitivity": 6.0, "deadzone": 2.0, "inverted": false },
-    "pitch": { "enabled": true, "sensitivity": 6.0, "deadzone": 2.0, "inverted": false },
-    "roll": { "enabled": true, "sensitivity": 6.0, "deadzone": 2.0, "inverted": false },
-    "x": { "enabled": true, "sensitivity": 1.0, "deadzone": 1.0, "inverted": false },
-    "y": { "enabled": true, "sensitivity": 1.0, "deadzone": 1.0, "inverted": false },
-    "z": { "enabled": true, "sensitivity": 1.0, "deadzone": 1.0, "inverted": false }
+    "yaw": { "enabled": true, "sensitivity": 6.0, "deadzone": 0.5, "inverted": false },
+    "pitch": { "enabled": true, "sensitivity": 6.0, "deadzone": 0.5, "inverted": false },
+    "roll": { "enabled": true, "sensitivity": 6.0, "deadzone": 0.5, "inverted": false },
+    "x": { "enabled": true, "sensitivity": 1.0, "deadzone": 0.5, "inverted": false },
+    "y": { "enabled": true, "sensitivity": 1.0, "deadzone": 0.5, "inverted": false },
+    "z": { "enabled": true, "sensitivity": 1.0, "deadzone": 0.5, "inverted": false }
   }
 }

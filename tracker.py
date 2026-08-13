@@ -8,7 +8,7 @@ import mediapipe as mp
 from mediapipe.tasks.python import BaseOptions
 from mediapipe.tasks.python.vision import FaceLandmarker, FaceLandmarkerOptions
 
-from filter import AdaptiveExponentialFilter
+from filter import AdaptiveExponentialFilter, AdaptivePoseFilter
 from pose import Pose
 from cam_calib import CameraCalibration, rotation_matrix_to_euler
 
@@ -29,9 +29,6 @@ MODEL_POINTS = np.array(
 )
 
 # MediaPipe FaceLandmarker landmark indices corresponding to MODEL_POINTS
-# Eye/mouth corner pairs are swapped: MediaPipe's 33/61 are the subject's
-# left eye/mouth (image-left for a mirrored view), the PnP model expects
-# the opposite pairing — without the swap solvePnP yields a ~180° roll.
 LANDMARK_INDICES = [1, 152, 263, 33, 291, 61]
 
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "face_landmarker.task")
@@ -73,7 +70,9 @@ class HeadTracker:
         self._confidence_threshold: float = confidence_threshold
         self._last_landmarks = None
         self._smoothing: float = max(0.0, min(1.0, smoothing))
-        self._smooth_state: dict | None = None
+        self._pose_filter: AdaptivePoseFilter | None = (
+            AdaptivePoseFilter(self._smoothing) if self._smoothing > 0.0 else None
+        )
         self._calibration: CameraCalibration | None = calibration
 
         # Smooth confidence: fast rise, slow fall
@@ -118,35 +117,17 @@ class HeadTracker:
 
     def set_smoothing(self, smoothing: float):
         self._smoothing = max(0.0, min(1.0, smoothing))
-        if self._smoothing <= 0.0:
-            self._smooth_state = None
+        self._pose_filter = (
+            AdaptivePoseFilter(self._smoothing) if self._smoothing > 0.0 else None
+        )
 
     def set_calibration(self, calibration: CameraCalibration | None):
         self._calibration = calibration
 
     def _apply_smoothing(self, pose: Pose) -> Pose:
-        if self._smoothing <= 0.0:
-            self._smooth_state = None
+        if self._pose_filter is None:
             return pose
-        alpha = 1.0 - self._smoothing
-        state = self._smooth_state
-        if state is None:
-            self._smooth_state = {
-                "yaw": pose.yaw, "pitch": pose.pitch, "roll": pose.roll,
-                "x": pose.x, "y": pose.y, "z": pose.z,
-            }
-            return pose
-        vals = {
-            "yaw": pose.yaw, "pitch": pose.pitch, "roll": pose.roll,
-            "x": pose.x, "y": pose.y, "z": pose.z,
-        }
-        for k, v in vals.items():
-            state[k] = state[k] + (v - state[k]) * alpha
-        return Pose(
-            yaw=state["yaw"], pitch=state["pitch"], roll=state["roll"],
-            x=state["x"], y=state["y"], z=state["z"],
-            confidence=pose.confidence, timestamp=pose.timestamp,
-        )
+        return self._pose_filter(pose)
 
     def process_frame(
         self,
@@ -177,7 +158,8 @@ class HeadTracker:
         if not result.face_landmarks:
             self._last_landmarks = None
             self._raw_confidence = 0.0
-            self._smooth_state = None
+            if self._pose_filter is not None:
+                self._pose_filter.reset()
             self._face_boxes = []
             self._selected_center = None
             # Check hold time before fully losing

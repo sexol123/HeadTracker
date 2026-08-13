@@ -55,7 +55,7 @@ class FakeTracker(HeadTracker):
         self._confidence_threshold = 0.3
         self._last_landmarks = None
         self._smoothing = 0.0
-        self._smooth_state = None
+        self._pose_filter = None
         self._calibration = None
         self._confidence_smoother = AdaptiveExponentialFilter(rise_alpha=0.8, fall_alpha=0.05)
         self._raw_confidence = 0.0
