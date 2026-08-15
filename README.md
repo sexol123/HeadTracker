@@ -14,7 +14,7 @@ Head tracking software for racing and flight simulators. Uses a regular USB webc
 - **Per-axis settings** — Sensitivity, deadzone, inversion for each axis
 - **Nonlinear response curves** — second bend point per axis (like opentrack): boost small movements without hitting the ceiling on large ones
 - **Multi-face selection** — when several people are in the frame, pick which face to track (stays locked to that person)
-- **Game presets** — Pre-configured profiles for popular simulators
+- **Adaptive smoothing** — Accela-style pose filter: suppresses jitter and stays stable even when looking straight up, without slowing fast moves
 - **Profile system** — Create, delete profiles; profiles apply instantly on selection; center pose and response curves are stored per profile
 - **Live settings** — Profile, per-axis settings, smoothing, camera rotation/mirror/CLAHE, camera adaptation and mouse options change instantly while tracking runs
 - **Auto-save** — Settings and profile edits are saved automatically (debounced), not only on exit
@@ -104,7 +104,7 @@ chmod +x HeadTracker.command
 python main.py              # Normal mode
 python main.py -debug       # Debug mode (file + console logging)
 python main.py -logging     # Same as -debug
-python main.py --profile beamng --autostart   # Start with a profile and auto-track
+python main.py --profile default --autostart   # Start with a profile and auto-track
 ```
 
 ## Testing
@@ -124,7 +124,7 @@ go to `tests/out/`. Requires the MediaPipe model (`setup.bat` downloads it) and
 
 1. **Select camera** — Camera tab, pick a webcam, enter an IP/WebSocket URL
 2. **Press Start** — Button turns yellow (⏳) then red (Stop), tracking begins
-3. **Select profile** — Axes tab, pick a game preset from the dropdown
+3. **Select profile** — Axes tab, pick a profile from the dropdown
 4. **Launch your game** — FreeTrack/UDP data is sent automatically
 5. **Press Stop** — Button turns green (Start), tracking stops, all values reset to zero
 
@@ -266,10 +266,14 @@ For dim environments, enable CLAHE image enhancement:
 
 ### Smoothing
 
-Axes tab → **Smoothing** slider (0–100%) applies exponential smoothing to the
+Axes tab → **Smoothing** slider (0–100%) controls the pose filter applied to the
 whole head pose (yaw/pitch/roll and position) before it is sent to any protocol.
-Higher values feel smoother but add lag; start around 50%. It is reset when the
-face is lost and re-acquired. The slider stays active during tracking — you can
+At higher values a small deadzone and a velocity-adaptive gain (Accela-style)
+smooth out jitter, while fast deliberate moves still pass through. The rotation
+is filtered in the tangent space (matrix deltas, not Euler angles), so it
+stays stable when you look straight up — no gimbal jumps. Higher values feel
+smoother but add lag; start around 60%. The filter is reset when the face is
+lost and re-acquired, and the slider stays active during tracking — you can
 tune it live.
 
 ### Output Protocols
@@ -320,9 +324,9 @@ Useful for games that have no FreeTrack/UDP support but accept mouse input:
 Mode, speed, stop method and hotkey can all be changed while tracking runs —
 they apply immediately.
 
-Pose is smoothed (EMA) and a small minimum deadzone is applied so small head
-jitter (especially the pitch drift while turning your head sideways) does not
-move the cursor unexpectedly.
+Pose is smoothed by the adaptive pose filter and a small minimum deadzone is
+applied so small head jitter (especially the pitch drift while turning your head
+sideways) does not move the cursor unexpectedly.
 
 > **Note:** some games read the mouse via Raw Input and ignore programmatically
 > injected movement (SendInput/pynput). Such games will not respond to Mouse output;
@@ -358,18 +362,10 @@ Language selector in the About tab. Changes apply instantly without restart:
 
 ### Windows (FreeTrack)
 
-Any game that supports FreeTrack or TrackIR protocol:
-
-| Game | Preset |
-|------|--------|
-| Assetto Corsa | `assetto_corsa.json` |
-| Assetto Corsa Competizione | `assetto_corsa_competizione.json` |
-| BeamNG.drive | `beamng.json` |
-| Euro Truck Simulator 2 | `ets2.json` |
-| American Truck Simulator | `ats.json` |
-| DCS World | `dcs.json` |
-| War Thunder | `war_thunder.json` |
-| WRC | `wrc.json` |
+Any game that supports FreeTrack or TrackIR protocol. The built-in `Default`
+profile is tuned for general use (smoothing 60%, small deadzones); for a
+specific game, create a profile and tune sensitivity/deadzone per axis — see
+the Profile system.
 
 ### Linux / SteamOS (UDP)
 
@@ -433,7 +429,7 @@ HeadTracker/
 ├── i18n.py                # Localization (en, ru, uk, de)
 ├── camera.py              # Webcam + IP camera capture, frame stats
 ├── tracker.py             # MediaPipe FaceLandmarker + PnP head pose
-├── filter.py              # One Euro Filter, Exponential, Passthrough
+├── filter.py              # AdaptivePoseFilter (Accela-style), One Euro, Exponential, Passthrough
 ├── worker.py              # Background tracking thread (QThread)
 ├── freetrack.py           # FreeTrack 2.0 shared memory (Windows-only)
 ├── udp_output.py          # UDP output (cross-platform)
@@ -441,7 +437,7 @@ HeadTracker/
 ├── ui/
 │   └── main_window.py     # PySide6 GUI, overlay, profile management
 ├── models/                # MediaPipe face_landmarker.task
-├── profiles/              # Game preset profiles (JSON)
+├── profiles/              # User profiles (JSON; Default built-in)
 ├── settings.json          # App settings (auto-saved, gitignored)
 ├── logs/                  # Debug session logs (gitignored)
 ├── ROADMAP.md             # Development roadmap
