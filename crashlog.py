@@ -52,6 +52,29 @@ def _thread_excepthook(args):
         _orig_thread_excepthook(args)
 
 
+def enable_wer_local_dumps(dump_dir: Path | None = None) -> None:
+    """Enable Windows Error Reporting LocalDumps (HKCU, no admin required) so
+    native crashes (e.g. Qt/OpenCV access violations) produce a real minidump
+    with a C stack for post-mortem analysis — faulthandler alone cannot show
+    the native frames ("cannot get C stack on this system")."""
+    if os.name != "nt":
+        return
+    dump_dir = dump_dir or (Path(__file__).parent / "logs" / "minidumps")
+    try:
+        dump_dir.mkdir(parents=True, exist_ok=True)
+        import winreg as wr
+        base = r"Software\Microsoft\Windows\Windows Error Reporting\LocalDumps"
+        for exe in ("python.exe", "pythonw.exe"):
+            key_path = base + "\\" + exe
+            with wr.CreateKeyEx(wr.HKEY_CURRENT_USER, key_path, 0, wr.KEY_SET_VALUE) as key:
+                wr.SetValueEx(key, "DumpFolder", 0, wr.REG_EXPAND_SZ, str(dump_dir))
+                wr.SetValueEx(key, "DumpType", 0, wr.REG_DWORD, 1)  # mini dump
+                wr.SetValueEx(key, "DumpCount", 0, wr.REG_DWORD, 6)
+        log.info(f"WER LocalDumps enabled -> {dump_dir}")
+    except Exception as e:
+        log.warning(f"Failed to enable WER LocalDumps: {e}")
+
+
 def install_crash_handlers(enable_faulthandler: bool = True):
     """Install hooks that dump crashes (unhandled exceptions, native faults)
     to logs/crash_*.log files."""
@@ -60,6 +83,7 @@ def install_crash_handlers(enable_faulthandler: bool = True):
     if sys.version_info >= (3, 8):
         _orig_thread_excepthook = threading.excepthook
         threading.excepthook = _thread_excepthook
+    enable_wer_local_dumps()
     if enable_faulthandler:
         try:
             import faulthandler

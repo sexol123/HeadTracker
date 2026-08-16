@@ -28,6 +28,7 @@ from pathlib import Path
 
 log = logging.getLogger("ui")
 ICON_PATH = Path(__file__).parent.parent / "HeadTrackerIcon.png"
+PREVIEW_MAX_FPS = 30.0  # preview repaint throttle — the window rarely needs more
 MOUSE_HOTKEYS = (
     [f"f{i}" for i in range(1, 13)] + ["space", "insert", "delete"]
     + [
@@ -87,6 +88,8 @@ class MainWindow(QMainWindow):
         self._last_landmarks = None
         self._current_profile_path: Path | None = None
         self._was_minimized = False
+        self._last_preview_update = 0.0
+        self._last_preview_buf = None
 
         self._autosave_timer = QTimer(self)
         self._autosave_timer.setSingleShot(True)
@@ -1158,11 +1161,20 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def _on_worker_frame(self, frame):
         try:
+            # Native Qt paint events are asynchronous: QImage must own its
+            # pixel data. Wrapping a numpy buffer without a copy lets Qt read
+            # freed memory later — a classic source of access violations in
+            # the main event loop that Python cannot catch.
+            now = time.perf_counter()
+            if now - self._last_preview_update < 1.0 / PREVIEW_MAX_FPS:
+                return
+            self._last_preview_update = now
             self._last_landmarks = getattr(frame, "landmarks", None)
             display_frame = self._draw_overlay(frame.image, self.current_pose)
             rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
             h, w, ch = rgb.shape
-            qimg = QImage(rgb.data, w, h, ch * w, QImage.Format_RGB888)
+            self._last_preview_buf = rgb.tobytes()
+            qimg = QImage(self._last_preview_buf, w, h, ch * w, QImage.Format_RGB888)
             pixmap = QPixmap.fromImage(qimg)
             scaled = pixmap.scaled(self.preview_label.size(), Qt.KeepAspectRatio, Qt.FastTransformation)
             self.preview_label.setPixmap(scaled)
