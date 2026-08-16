@@ -1,5 +1,7 @@
+import json
 import logging
 import ssl
+import subprocess
 import sys
 import time
 import threading
@@ -12,6 +14,34 @@ IS_WINDOWS = sys.platform == "win32"
 log = logging.getLogger("camera")
 
 STALL_TIMEOUT = 5.0  # seconds without a frame -> camera considered stalled
+
+# DirectShow probing runs in a subprocess: a broken camera driver can raise a
+# native fault (e.g. STATUS_INTEGER_DIVIDE_BY_ZERO in OpenCV's cap_dshow.cpp)
+# which Python exceptions cannot catch and would kill the whole app.
+_CAMERA_PROBE_SCRIPT = r"""
+import json, sys
+import cv2
+
+max_count = int(sys.argv[1]) if len(sys.argv) > 1 else 10
+is_windows = sys.platform == "win32"
+for i in range(max_count):
+    cap = None
+    try:
+        cap = cv2.VideoCapture(i, cv2.CAP_DSHOW) if is_windows else cv2.VideoCapture(i)
+        if cap.isOpened():
+            w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+            h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+            fps = int(cap.get(cv2.CAP_PROP_FPS))
+            print(json.dumps({"index": i, "width": w, "height": h, "fps": fps}), flush=True)
+    except Exception as e:
+        print(json.dumps({"index": i, "error": str(e)}), flush=True)
+    finally:
+        if cap is not None:
+            try:
+                cap.release()
+            except Exception:
+                pass
+"""
 
 
 def apply_clahe(frame: np.ndarray, clahe: cv2.CLAHE) -> np.ndarray:
@@ -57,26 +87,55 @@ class Camera:
         self._drop_count: int = 0
         self._enhance: bool = False
         self._clahe = cv2.createCLAHE(clipLimit=3.0, tileGridSize=(8, 8))
+        # Serializes open/read/release across threads: stop() must never
+        # release the capture while get_frame() is inside cap.read() — that
+        # races with DirectShow graph teardown and can fault natively (AV).
+        self._cap_lock = threading.Lock()
 
     def get_stats(self) -> CameraStats:
         return self._stats
 
     @staticmethod
     def list_cameras(max_count: int = 10) -> list[dict]:
+        """Probe cameras in a subprocess so a native fault inside DirectShow
+        (e.g. int divide by zero with a broken driver) cannot kill the app.
+        Returns whatever the child managed to report before crashing."""
         cameras = []
-        for i in range(max_count):
-            try:
-                # DirectShow only on Windows; Linux uses default backend (V4L2)
-                cap = cv2.VideoCapture(i, cv2.CAP_DSHOW) if IS_WINDOWS else cv2.VideoCapture(i)
-                if cap.isOpened():
-                    w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-                    h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-                    fps = int(cap.get(cv2.CAP_PROP_FPS))
-                    cameras.append({"index": i, "width": w, "height": h, "fps": fps})
-                    cap.release()
-            except Exception as e:
-                log.warning(f"Error probing camera index={i}: {e}")
+        try:
+            proc = subprocess.run(
+                [sys.executable, "-c", _CAMERA_PROBE_SCRIPT, str(max_count)],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                creationflags=0x08000000 if IS_WINDOWS else 0,  # CREATE_NO_WINDOW
+            )
+            for line in proc.stdout.splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                except ValueError:
+                    continue
+                if "error" not in data:
+                    cameras.append(data)
+        except subprocess.TimeoutExpired:
+            log.warning("Camera probe subprocess timed out")
+        except Exception as e:
+            log.warning(f"Camera probe subprocess failed: {e}")
+        log.debug(f"Camera probe found {len(cameras)} device(s)")
         return cameras
+
+    def _shutdown_cap(self):
+        """Release the capture. Must be called with _cap_lock held."""
+        if self._cap is not None:
+            try:
+                self._cap.release()
+            except Exception as e:
+                log.warning(f"Error releasing camera: {e}")
+            self._cap = None
+        self._index = -1
+        self._url = ""
 
     def start(
         self,
@@ -89,82 +148,83 @@ class Camera:
         url: str = "",
         enhance: bool = False,
     ) -> bool:
-        self.stop()
-        self._mirror = mirror
-        self._rotation = rotation
-        self._url = url
-        self._enhance = enhance
-        self._frame_times = []
-        self._last_frame_time = 0.0
-        self._frame_count = 0
-        self._drop_count = 0
-        self._stats = CameraStats()
-        if enhance:
-            log.info("Image enhancement (CLAHE) enabled")
+        with self._cap_lock:
+            self._shutdown_cap()
+            self._mirror = mirror
+            self._rotation = rotation
+            self._url = url
+            self._enhance = enhance
+            self._frame_times = []
+            self._last_frame_time = 0.0
+            self._frame_count = 0
+            self._drop_count = 0
+            self._stats = CameraStats()
+            if enhance:
+                log.info("Image enhancement (CLAHE) enabled")
 
-        if url:
-            url = url.strip()
-            # Normalize scheme if missing
-            if not any(url.startswith(scheme) for scheme in ("http://", "https://", "rtsp://", "udp://", "wss://", "ws://")):
-                if ":554" in url:
-                    url = "rtsp://" + url
+            if url:
+                url = url.strip()
+                # Normalize scheme if missing
+                if not any(url.startswith(scheme) for scheme in ("http://", "https://", "rtsp://", "udp://", "wss://", "ws://")):
+                    if ":554" in url:
+                        url = "rtsp://" + url
+                    else:
+                        url = "http://" + url
+                    log.info(f"Auto-normalized IP camera URL to: {url}")
+
+                # Auto-append stream path if user provided only IP:port (e.g. https://192.168.178.73:4444)
+                from urllib.parse import urlparse
+                parsed = urlparse(url)
+                if not parsed.path or parsed.path == "/":
+                    url = url.rstrip("/") + "/video"
+                    log.info(f"Auto-appended '/video' stream endpoint: {url}")
+
+                log.info(f"Opening IP camera stream: {url}")
+                import os
+                ffmpeg_opts = []
+                if url.startswith("rtsp://"):
+                    ffmpeg_opts.extend(["rtsp_transport;tcp", "stimeout;3000000"])
                 else:
-                    url = "http://" + url
-                log.info(f"Auto-normalized IP camera URL to: {url}")
+                    ffmpeg_opts.extend(["timeout;3000000"])
 
-            # Auto-append stream path if user provided only IP:port (e.g. https://192.168.178.73:4444)
-            from urllib.parse import urlparse
-            parsed = urlparse(url)
-            if not parsed.path or parsed.path == "/":
-                url = url.rstrip("/") + "/video"
-                log.info(f"Auto-appended '/video' stream endpoint: {url}")
+                if url.startswith("https://"):
+                    ffmpeg_opts.append("ssl_verify;0")
 
-            log.info(f"Opening IP camera stream: {url}")
-            import os
-            ffmpeg_opts = []
-            if url.startswith("rtsp://"):
-                ffmpeg_opts.extend(["rtsp_transport;tcp", "stimeout;3000000"])
-            else:
-                ffmpeg_opts.extend(["timeout;3000000"])
+                os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "|".join(ffmpeg_opts)
+                log.info(f"FFmpeg options set: {os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS']}")
 
-            if url.startswith("https://"):
-                ffmpeg_opts.append("ssl_verify;0")
+                self._cap = cv2.VideoCapture(url)
+                if not self._cap.isOpened() and url.endswith("/video"):
+                    alt_url = url[:-6] + "/mjpeg"
+                    log.info(f"Retrying stream with alternative endpoint: {alt_url}")
+                    self._cap = cv2.VideoCapture(alt_url)
 
-            os.environ["OPENCV_FFMPEG_CAPTURE_OPTIONS"] = "|".join(ffmpeg_opts)
-            log.info(f"FFmpeg options set: {os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS']}")
+                if not self._cap or not self._cap.isOpened():
+                    log.error(f"Failed to open IP camera: {url}. Check IP address, port, and camera app.")
+                    return False
+                w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+                h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+                self._stats.resolution = f"{w}x{h}"
+                log.info(f"IP camera opened OK ({w}x{h})")
+                return True
 
-            self._cap = cv2.VideoCapture(url)
-            if not self._cap.isOpened() and url.endswith("/video"):
-                alt_url = url[:-6] + "/mjpeg"
-                log.info(f"Retrying stream with alternative endpoint: {alt_url}")
-                self._cap = cv2.VideoCapture(alt_url)
-
-            if not self._cap or not self._cap.isOpened():
-                log.error(f"Failed to open IP camera: {url}. Check IP address, port, and camera app.")
-                return False
+            self._index = index
+            log.info(f"Opening local camera index={index}, {width}x{height}@{fps}fps")
+            # DirectShow only on Windows; Linux uses default backend (V4L2)
+            self._cap = cv2.VideoCapture(index, cv2.CAP_DSHOW) if IS_WINDOWS else cv2.VideoCapture(index)
+            if not self._cap.isOpened():
+                self._cap = cv2.VideoCapture(index)
+                if not self._cap.isOpened():
+                    log.error(f"Failed to open camera index={index}")
+                    return False
+            self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+            self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+            self._cap.set(cv2.CAP_PROP_FPS, fps)
             w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
             h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
             self._stats.resolution = f"{w}x{h}"
-            log.info(f"IP camera opened OK ({w}x{h})")
+            log.info("Camera opened OK")
             return True
-
-        self._index = index
-        log.info(f"Opening local camera index={index}, {width}x{height}@{fps}fps")
-        # DirectShow only on Windows; Linux uses default backend (V4L2)
-        self._cap = cv2.VideoCapture(index, cv2.CAP_DSHOW) if IS_WINDOWS else cv2.VideoCapture(index)
-        if not self._cap.isOpened():
-            self._cap = cv2.VideoCapture(index)
-            if not self._cap.isOpened():
-                log.error(f"Failed to open camera index={index}")
-                return False
-        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
-        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
-        self._cap.set(cv2.CAP_PROP_FPS, fps)
-        w = int(self._cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        h = int(self._cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        self._stats.resolution = f"{w}x{h}"
-        log.info("Camera opened OK")
-        return True
 
     def set_image_options(self, mirror: bool | None = None, rotation: int | None = None, enhance: bool | None = None):
         if mirror is not None:
@@ -175,55 +235,57 @@ class Camera:
             self._enhance = bool(enhance)
 
     def get_frame(self) -> CameraFrame | None:
-        if self._cap is None or not self._cap.isOpened():
-            return None
+        with self._cap_lock:
+            cap = self._cap
+            if cap is None or not cap.isOpened():
+                return None
 
-        now = time.perf_counter()
-        if self._last_frame_time > 0 and now - self._last_frame_time > STALL_TIMEOUT:
-            self._stats.stalled = True
+            now = time.perf_counter()
+            if self._last_frame_time > 0 and now - self._last_frame_time > STALL_TIMEOUT:
+                self._stats.stalled = True
 
-        try:
-            ret, frame = self._cap.read()
-            t1 = time.perf_counter()
+            try:
+                ret, frame = cap.read()
+                t1 = time.perf_counter()
+            except cv2.error as e:
+                log.error(f"OpenCV error reading frame: {e}")
+                self._drop_count += 1
+                return None
+            except Exception as e:
+                log.error(f"Unexpected error reading frame: {e}", exc_info=True)
+                self._drop_count += 1
+                return None
 
             if not ret or frame is None:
                 self._drop_count += 1
                 return None
-        except cv2.error as e:
-            log.error(f"OpenCV error reading frame: {e}")
-            self._drop_count += 1
-            return None
-        except Exception as e:
-            log.error(f"Unexpected error reading frame: {e}", exc_info=True)
-            self._drop_count += 1
-            return None
 
-        self._frame_count += 1
-        self._last_frame_time = time.perf_counter()
-        self._stats.stalled = False
+            self._frame_count += 1
+            self._last_frame_time = time.perf_counter()
+            self._stats.stalled = False
 
-        # Track frame times for FPS calculation (last 30 frames)
-        previous_frame_time = self._frame_times[-1] if self._frame_times else None
-        self._frame_times.append(t1)
-        if len(self._frame_times) > 30:
-            self._frame_times.pop(0)
+            # Track frame times for FPS calculation (last 30 frames)
+            previous_frame_time = self._frame_times[-1] if self._frame_times else None
+            self._frame_times.append(t1)
+            if len(self._frame_times) > 30:
+                self._frame_times.pop(0)
 
-        # Calculate FPS
-        if len(self._frame_times) >= 2:
-            dt = self._frame_times[-1] - self._frame_times[0]
-            if dt > 0:
-                self._stats.fps = (len(self._frame_times) - 1) / dt
+            # Calculate FPS
+            if len(self._frame_times) >= 2:
+                dt = self._frame_times[-1] - self._frame_times[0]
+                if dt > 0:
+                    self._stats.fps = (len(self._frame_times) - 1) / dt
 
-        if previous_frame_time is not None:
-            self._stats.frame_time_ms = (t1 - previous_frame_time) * 1000.0
-        self._stats.total_frames = self._frame_count
-        self._stats.dropped_frames = self._drop_count
+            if previous_frame_time is not None:
+                self._stats.frame_time_ms = (t1 - previous_frame_time) * 1000.0
+            self._stats.total_frames = self._frame_count
+            self._stats.dropped_frames = self._drop_count
 
-        # Uncompressed BGR data rate derived from delivered FPS. It is not the
-        # compressed on-the-wire bitrate of an IP stream.
-        h, w = frame.shape[:2]
-        frame_bytes = w * h * 3  # BGR
-        self._stats.bandwidth_mbps = frame_bytes * 8 * self._stats.fps / 1_000_000
+            # Uncompressed BGR data rate derived from delivered FPS. It is not the
+            # compressed on-the-wire bitrate of an IP stream.
+            h, w = frame.shape[:2]
+            frame_bytes = w * h * 3  # BGR
+            self._stats.bandwidth_mbps = frame_bytes * 8 * self._stats.fps / 1_000_000
 
         if self._rotation == 90:
             frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
@@ -248,14 +310,17 @@ class Camera:
         )
 
     def stop(self):
-        if self._cap is not None:
-            try:
-                self._cap.release()
-            except Exception as e:
-                log.warning(f"Error releasing camera: {e}")
-            self._cap = None
-        self._index = -1
-        self._url = ""
+        # Bounded wait for an in-flight read(): releasing the DirectShow graph
+        # while cap.read() is executing faults natively. If the read is stuck
+        # for >2s, release anyway — it is the only way to unblock that read.
+        acquired = self._cap_lock.acquire(timeout=2.0)
+        if not acquired:
+            log.warning("Camera read is stuck — releasing capture to unblock it")
+        try:
+            self._shutdown_cap()
+        finally:
+            if acquired:
+                self._cap_lock.release()
 
     @property
     def is_running(self) -> bool:
