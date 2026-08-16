@@ -17,6 +17,8 @@ from camera import Camera
 from tracker import Pose
 from freetrack import IS_WINDOWS
 from ui.stats_graph import StatsGraph
+from ui.cockpit_view import CockpitRenderer
+from ui.tuning_assistant import TuningRecorder, TuningDialog
 from i18n import t, set_language, get_language, available_languages
 from config import (
     Profile, AxisConfig,
@@ -90,6 +92,12 @@ class MainWindow(QMainWindow):
         self._was_minimized = False
         self._last_preview_update = 0.0
         self._last_preview_buf = None
+        self._preview_mode = "camera"
+        self._cockpit_renderer = CockpitRenderer()
+        self._tuning_recorder = TuningRecorder()
+        self._demo_timer = QTimer(self)
+        self._demo_timer.setInterval(33)
+        self._demo_timer.timeout.connect(self._on_demo_tick)
 
         self._autosave_timer = QTimer(self)
         self._autosave_timer.setSingleShot(True)
@@ -180,6 +188,21 @@ class MainWindow(QMainWindow):
         self.preview_label.setMinimumSize(480, 360)
         self.preview_label.setStyleSheet("background-color: #1a1a2e; color: #888;")
         left_layout.addWidget(self.preview_label)
+
+        preview_controls = QHBoxLayout()
+        self.combo_preview_mode = QComboBox()
+        self.combo_preview_mode.addItem(t("preview_camera"), "camera")
+        self.combo_preview_mode.addItem(t("preview_cockpit"), "cockpit")
+        self.combo_preview_mode.currentIndexChanged.connect(self._on_preview_mode_changed)
+        preview_controls.addWidget(self.combo_preview_mode)
+        self.chk_demo = QCheckBox(t("demo_mode"))
+        self.chk_demo.setToolTip(t("demo_mode_tip"))
+        self.chk_demo.toggled.connect(self._on_demo_toggled)
+        preview_controls.addWidget(self.chk_demo)
+        self.btn_tuning = QPushButton(t("tuning_btn"))
+        self.btn_tuning.clicked.connect(self._on_tuning_clicked)
+        preview_controls.addWidget(self.btn_tuning)
+        left_layout.addLayout(preview_controls)
 
         controls_layout = QHBoxLayout()
         self.btn_start = QPushButton(t("btn_start"))
@@ -1161,14 +1184,17 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def _on_worker_frame(self, frame):
         try:
-            # Native Qt paint events are asynchronous: QImage must own its
-            # pixel data. Wrapping a numpy buffer without a copy lets Qt read
-            # freed memory later — a classic source of access violations in
-            # the main event loop that Python cannot catch.
             now = time.perf_counter()
             if now - self._last_preview_update < 1.0 / PREVIEW_MAX_FPS:
                 return
             self._last_preview_update = now
+            if self._preview_mode != "camera":
+                self._render_cockpit_preview(self.worker.get_raw_pose(), self.current_pose)
+                return
+            # Native Qt paint events are asynchronous: QImage must own its
+            # pixel data. Wrapping a numpy buffer without a copy lets Qt read
+            # freed memory later — a classic source of access violations in
+            # the main event loop that Python cannot catch.
             self._last_landmarks = getattr(frame, "landmarks", None)
             display_frame = self._draw_overlay(frame.image, self.current_pose)
             rgb = cv2.cvtColor(display_frame, cv2.COLOR_BGR2RGB)
@@ -1180,6 +1206,106 @@ class MainWindow(QMainWindow):
             self.preview_label.setPixmap(scaled)
         except Exception as e:
             log.warning(f"Display update error: {e}")
+
+    # ── Cockpit preview & demo ───────────────────────────────────────
+    def _render_cockpit_preview(self, raw_pose, sent_pose):
+        size = self.preview_label.size()
+        w, h = size.width(), size.height()
+        if w <= 0 or h <= 0:
+            return
+        self._cockpit_renderer.set_fov(self.app_settings.camera_fov)
+        img = self._cockpit_renderer.render(
+            yaw_deg=sent_pose.yaw,
+            pitch_deg=sent_pose.pitch,
+            roll_deg=sent_pose.roll,
+            x_cm=sent_pose.x / 10.0,
+            y_cm=sent_pose.y / 10.0,
+            z_cm=sent_pose.z / 10.0,
+            width=w,
+            height=h,
+            raw={"yaw": raw_pose.yaw, "pitch": raw_pose.pitch, "roll": raw_pose.roll},
+            sent={"yaw": sent_pose.yaw, "pitch": sent_pose.pitch, "roll": sent_pose.roll},
+        )
+        self.preview_label.setPixmap(QPixmap.fromImage(img))
+
+    def _on_preview_mode_changed(self, index):
+        self._preview_mode = "cockpit" if index == 1 else "camera"
+        if self._preview_mode == "cockpit" and self.chk_demo.isChecked() and not self.tracking_active:
+            self._demo_timer.start()
+        else:
+            self._demo_timer.stop()
+            if not self.tracking_active:
+                self.preview_label.clear()
+                self.preview_label.setText(t("camera_preview"))
+
+    def _on_demo_toggled(self, checked):
+        if checked and self._preview_mode == "cockpit" and not self.tracking_active:
+            self._demo_timer.start()
+        else:
+            self._demo_timer.stop()
+            if not self.tracking_active:
+                self.preview_label.clear()
+                self.preview_label.setText(t("camera_preview"))
+
+    def _on_demo_tick(self):
+        """Synthetic head movement through the real mapping pipeline —
+        validates sensitivity/curves/deadzone without any camera or game."""
+        if self.tracking_active:
+            self._demo_timer.stop()
+            return
+        t0 = time.perf_counter()
+        raw = Pose(
+            yaw=25.0 * math.sin(2 * math.pi * 0.20 * t0),
+            pitch=12.0 * math.sin(2 * math.pi * 0.17 * t0 + 1.0),
+            roll=8.0 * math.sin(2 * math.pi * 0.13 * t0 + 2.0),
+            x=60.0 * math.sin(2 * math.pi * 0.10 * t0),
+            y=30.0 * math.sin(2 * math.pi * 0.09 * t0 + 0.5),
+            z=0.0,
+            confidence=1.0,
+        )
+        mapped = TrackingWorker._apply_mapping(raw, self.profile)
+        self._render_cockpit_preview(raw, mapped)
+
+    # ── Tuning assistant ─────────────────────────────────────────────
+    def _on_tuning_clicked(self):
+        dlg = TuningDialog(
+            self._tuning_recorder,
+            self._apply_tuning_changes,
+            self._recenter_for_tuning,
+            parent=self,
+        )
+        dlg.exec()
+
+    def _apply_tuning_changes(self, changes: dict):
+        s = self.app_settings
+        mode = changes.get("pose_smoothing")
+        if mode == "increase":
+            s.pose_smoothing = min(0.95, s.pose_smoothing + 0.15)
+        elif mode == "decrease":
+            s.pose_smoothing = max(0.0, s.pose_smoothing - 0.15)
+        for axis, c in changes.get("axes", {}).items():
+            ax = self.profile.axes.get(axis)
+            if ax is None:
+                continue
+            if "sensitivity" in c:
+                new = min(20.0, max(0.1, round(ax.sensitivity * float(c["sensitivity"]), 2)))
+                log.info("Tuning: %s sensitivity %.2f -> %.2f", axis, ax.sensitivity, new)
+                ax.sensitivity = new
+            if c.get("inverted"):
+                log.info("Tuning: %s inverted flipped", axis)
+                ax.inverted = not ax.inverted
+        save_settings(s)
+        if self._current_profile_path and self.profile:
+            save_profile(self.profile, self._current_profile_path)
+        if self.tracking_active:
+            self.worker.update_live_settings(s)
+            self.worker.update_profile(self.profile)
+        self._apply_profile()
+        log.info("Tuning changes applied")
+
+    def _recenter_for_tuning(self):
+        ok = self.worker.recenter_camera()
+        log.info("Tuning recenter: %s", "ok" if ok else "skipped (no face)" )
 
     @Slot(object)
     def _on_worker_faces(self, faces):
@@ -1267,6 +1393,8 @@ class MainWindow(QMainWindow):
         self.lbl_x.setText(f"{pose.x:+.1f}")
         self.lbl_y.setText(f"{pose.y:+.1f}")
         self.lbl_z.setText(f"{pose.z:+.1f}")
+        if self._tuning_recorder.recording:
+            self._tuning_recorder.add(self.worker.get_raw_pose(), pose)
 
     @Slot(float)
     def _on_worker_confidence(self, confidence):
@@ -1316,6 +1444,8 @@ class MainWindow(QMainWindow):
         self.preview_label.clear()
         self.preview_label.setText(t("camera_preview"))
         self.preview_label.setVisible(True)
+        if self._preview_mode == "cockpit" and self.chk_demo.isChecked():
+            self._demo_timer.start()
         self._face_boxes = []
         self._selected_face_idx = 0
         self.combo_face.blockSignals(True)

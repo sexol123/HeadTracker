@@ -1,0 +1,301 @@
+"""Tuning assistant: records raw vs mapped pose while the user moves their
+head, then quantifies gain, inversion, deadzone, jitter, lag and drift per
+axis, and proposes concrete profile changes — the same criteria OpenTrack /
+Beam Eye Tracker setups are judged by. Sessions can be exported to JSON for
+offline analysis."""
+import json
+import logging
+import time
+from datetime import datetime
+from pathlib import Path
+
+import numpy as np
+from PySide6.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTextEdit, QMessageBox,
+)
+
+from i18n import t
+
+log = logging.getLogger("tuning")
+
+ANGLES = ("yaw", "pitch", "roll")
+AXES = ("yaw", "pitch", "roll", "x", "y", "z")
+JITTER_WINDOW = 7          # moving-average window for jitter estimation
+MAX_LAG_MS = 400           # cross-correlation search window
+LAG_THRESHOLD_MS = 90      # above this, smoothing feels laggy
+JITTER_THRESHOLD_DEG = 1.2  # rms of high-freq residual -> "jittery"
+JITTER_THRESHOLD_MM = 12.0
+DEADZONE_MOVING_FRAC = 0.15  # mapped ~0 while clearly moving -> deadzone too big
+DRIFT_THRESHOLD_DEG = 5.0    # mean raw offset -> recenter / drift
+DRIFT_THRESHOLD_MM = 25.0
+GAIN_LOW = 0.7
+GAIN_HIGH = 1.5
+MIN_RAW_RANGE_DEG = 2.0       # below this a "range" analysis is meaningless
+MIN_RAW_RANGE_MM = 20.0
+MIN_SAMPLES = 30
+
+
+class TuningRecorder:
+    """Collects (raw, mapped, confidence, t) samples; pure data holder."""
+
+    def __init__(self):
+        self.samples: list[dict] = []
+        self.recording = False
+        self.started_at = 0.0
+
+    def start(self):
+        self.samples = []
+        self.recording = True
+        self.started_at = time.perf_counter()
+
+    def stop(self):
+        self.recording = False
+
+    def add(self, raw_pose, mapped_pose):
+        if not self.recording:
+            return
+        self.samples.append({
+            "t": time.perf_counter() - self.started_at,
+            "raw": {
+                "yaw": raw_pose.yaw, "pitch": raw_pose.pitch, "roll": raw_pose.roll,
+                "x": raw_pose.x, "y": raw_pose.y, "z": raw_pose.z,
+            },
+            "mapped": {
+                "yaw": mapped_pose.yaw, "pitch": mapped_pose.pitch, "roll": mapped_pose.roll,
+                "x": mapped_pose.x, "y": mapped_pose.y, "z": mapped_pose.z,
+            },
+            "confidence": mapped_pose.confidence,
+        })
+
+    @property
+    def count(self) -> int:
+        return len(self.samples)
+
+
+def _arr(samples: list[dict], field: str, axis: str) -> np.ndarray:
+    return np.array([s[field][axis] for s in samples], dtype=np.float64)
+
+
+def _p2p(v: np.ndarray) -> float:
+    if len(v) < 2:
+        return 0.0
+    lo, hi = np.percentile(v, [5, 95])
+    return float(hi - lo)
+
+
+def _rms(v: np.ndarray) -> float:
+    return float(np.sqrt(np.mean(v ** 2))) if len(v) else 0.0
+
+
+def _axis_report(samples: list[dict], axis: str) -> dict:
+    """Quantify one axis of a recording."""
+    raw = _arr(samples, "raw", axis)
+    mapped = _arr(samples, "mapped", axis)
+    n = len(raw)
+    report = {"axis": axis, "raw_range": _p2p(raw), "mapped_range": _p2p(mapped),
+              "raw_mean": float(np.mean(raw)), "mapped_mean": float(np.mean(mapped)),
+              "gain": None, "inverted": False, "corr": 0.0,
+              "deadzone_frac": 0.0, "jitter_rms": 0.0, "lag_ms": 0.0}
+
+    if n < 2:
+        return report
+
+    is_angle = axis in ANGLES
+    range_thr = MIN_RAW_RANGE_DEG if is_angle else MIN_RAW_RANGE_MM
+
+    # Correlation & inversion
+    r, m = raw - raw.mean(), mapped - mapped.mean()
+    denom = _rms(r) * _rms(m)
+    if denom > 1e-9:
+        report["corr"] = float(np.sum(r * m) / (n * denom))
+    report["inverted"] = report["corr"] < -0.3
+
+    # Gain over the usable range
+    if report["raw_range"] >= range_thr and not report["inverted"] and abs(report["corr"]) > 0.5:
+        report["gain"] = report["mapped_range"] / report["raw_range"]
+
+    # Deadzone: mapped ~0 while raw is clearly moving
+    moving = np.abs(raw) > (2.0 if is_angle else 15.0)
+    if moving.sum() >= 10:
+        report["deadzone_frac"] = float(np.mean(np.abs(mapped[moving]) < 0.3))
+
+    # Jitter: rms of high-frequency residual of the mapped signal
+    if n > JITTER_WINDOW + 2:
+        kernel = np.ones(JITTER_WINDOW) / JITTER_WINDOW
+        smooth = np.convolve(mapped, kernel, mode="same")
+        residual = mapped - smooth
+        report["jitter_rms"] = _rms(residual)
+
+    # Lag via cross-correlation (mapped vs raw), capped search window
+    lag = 0
+    maxlag = max(1, int(MAX_LAG_MS / 1000.0 * n / max(1.0, float(samples[-1]["t"] - samples[0]["t"]))))
+    maxlag = min(maxlag, n // 2)
+    if n > maxlag * 2 + 2:
+        r2, m2 = raw - raw.mean(), mapped - mapped.mean()
+        m2 = m2 / (np.linalg.norm(m2) + 1e-12)
+        best = -1.0
+        for k in range(-maxlag, maxlag + 1):
+            rk = r2[max(0, k): n + min(0, k)]
+            mk = m2[max(0, -k): n + min(0, -k)]
+            if len(rk) == len(mk) and len(rk) > 8:
+                c = float(np.dot(rk, mk)) / (np.linalg.norm(rk) + 1e-12)
+                if c > best:
+                    best, lag = c, k
+        dt = (samples[-1]["t"] - samples[0]["t"]) / max(1, n - 1)
+        # Peak at a negative shift means the mapped signal lags the raw one
+        report["lag_ms"] = max(0.0, -lag * dt * 1000.0)
+    return report
+
+
+def analyze_tuning(samples: list[dict]) -> dict:
+    """Full analysis: per-axis reports + human recommendations."""
+    if len(samples) < MIN_SAMPLES:
+        return {"ok": False, "count": len(samples), "reports": [], "recommendations": [],
+                "changes": {}}
+    reports = [_axis_report(samples, a) for a in AXES]
+    recommendations: list[str] = []
+    changes: dict = {}
+
+    for r in reports:
+        axis = r["axis"]
+        if r["inverted"]:
+            recommendations.append(t("tuning_invert").format(axis))
+            changes.setdefault("axes", {})[axis] = {"inverted": True}
+        if r["gain"] is not None:
+            if r["gain"] < GAIN_LOW:
+                factor = round(1.0 / r["gain"], 2)
+                recommendations.append(t("tuning_gain_low").format(axis, f"{r['gain']:.2f}", factor))
+                changes.setdefault("axes", {})[axis] = {"sensitivity": factor}
+            elif r["gain"] > GAIN_HIGH:
+                factor = round(r["gain"], 2)
+                recommendations.append(t("tuning_gain_high").format(axis, f"{r['gain']:.2f}", factor))
+                changes.setdefault("axes", {})[axis] = {"sensitivity": factor}
+        if r["deadzone_frac"] > DEADZONE_MOVING_FRAC:
+            recommendations.append(t("tuning_deadzone").format(axis, f"{r['deadzone_frac'] * 100:.0f}"))
+        if r["lag_ms"] > LAG_THRESHOLD_MS:
+            recommendations.append(t("tuning_lag").format(axis, f"{r['lag_ms']:.0f}"))
+            changes.setdefault("pose_smoothing", "decrease")
+        if r["jitter_rms"] > (JITTER_THRESHOLD_DEG if axis in ANGLES else JITTER_THRESHOLD_MM):
+            recommendations.append(t("tuning_jitter").format(axis, f"{r['jitter_rms']:.2f}"))
+            changes.setdefault("pose_smoothing", "increase")
+        if abs(r["raw_mean"]) > (DRIFT_THRESHOLD_DEG if axis in ANGLES else DRIFT_THRESHOLD_MM):
+            recommendations.append(t("tuning_drift").format(axis, f"{r['raw_mean']:+.1f}"))
+            changes.setdefault("recenter", True)
+
+    if not recommendations:
+        recommendations.append(t("tuning_ok"))
+    return {"ok": True, "count": len(samples), "reports": reports,
+            "recommendations": recommendations, "changes": changes}
+
+
+def export_tuning(samples: list[dict], profile_name: str, analysis: dict | None,
+                  out_dir: Path | None = None) -> Path:
+    """Write a session to logs/tuning_<timestamp>.json for offline analysis."""
+    out_dir = out_dir or (Path(__file__).parent.parent / "logs")
+    out_dir.mkdir(exist_ok=True)
+    path = out_dir / f"tuning_{datetime.now():%Y-%m-%d_%H-%M-%S}.json"
+    payload = {
+        "exported": datetime.now().isoformat(),
+        "profile": profile_name,
+        "analysis": analysis,
+        "samples": samples,
+    }
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=1), encoding="utf-8")
+    log.info("Tuning session exported: %s", path)
+    return path
+
+
+class TuningDialog(QDialog):
+    """Record -> analyze -> apply workflow."""
+
+    def __init__(self, recorder: TuningRecorder, apply_changes, recenter, parent=None):
+        super().__init__(parent)
+        self._recorder = recorder
+        self._apply_changes = apply_changes
+        self._recenter = recenter
+        self._analysis: dict | None = None
+        self.setWindowTitle(t("tuning_title"))
+        self.setMinimumSize(560, 420)
+
+        layout = QVBoxLayout(self)
+        hint = QLabel(t("tuning_hint"))
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+
+        self.lbl_status = QLabel(t("tuning_idle"))
+        layout.addWidget(self.lbl_status)
+
+        btn_row = QHBoxLayout()
+        self.btn_record = QPushButton(t("tuning_record_start"))
+        self.btn_record.clicked.connect(self._on_record)
+        btn_row.addWidget(self.btn_record)
+        self.btn_analyze = QPushButton(t("tuning_analyze"))
+        self.btn_analyze.clicked.connect(self._on_analyze)
+        self.btn_analyze.setEnabled(False)
+        btn_row.addWidget(self.btn_analyze)
+        self.btn_apply = QPushButton(t("tuning_apply"))
+        self.btn_apply.clicked.connect(self._on_apply)
+        self.btn_apply.setEnabled(False)
+        btn_row.addWidget(self.btn_apply)
+        self.btn_export = QPushButton(t("tuning_export"))
+        self.btn_export.clicked.connect(self._on_export)
+        self.btn_export.setEnabled(False)
+        btn_row.addWidget(self.btn_export)
+        layout.addLayout(btn_row)
+
+        self.report = QTextEdit()
+        self.report.setReadOnly(True)
+        self.report.setFont(self.report.font())
+        layout.addWidget(self.report)
+
+        self._refresh_timer = None
+
+    def _on_record(self):
+        r = self._recorder
+        if r.recording:
+            r.stop()
+            self.btn_record.setText(t("tuning_record_start"))
+            self.lbl_status.setText(t("tuning_recorded").format(r.count))
+            self.btn_analyze.setEnabled(r.count >= MIN_SAMPLES)
+        else:
+            r.start()
+            self.btn_record.setText(t("tuning_record_stop"))
+            self.lbl_status.setText(t("tuning_recording"))
+            self.btn_analyze.setEnabled(False)
+            self.btn_apply.setEnabled(False)
+            self.btn_export.setEnabled(False)
+            self.report.clear()
+
+    def _on_analyze(self):
+        self._analysis = analyze_tuning(self._recorder.samples)
+        if not self._analysis["ok"]:
+            self.lbl_status.setText(t("tuning_too_few").format(self._analysis["count"]))
+            return
+        lines = [t("tuning_count").format(self._analysis["count"])]
+        for r in self._analysis["reports"]:
+            lines.append(
+                f"{r['axis']}: raw {r['raw_range']:6.1f} -> sent {r['mapped_range']:6.1f}"
+                f"  gain {('%.2f' % r['gain']) if r['gain'] is not None else '  -- '}"
+                f"  corr {r['corr']:+.2f}  deadzone {r['deadzone_frac'] * 100:4.0f}%"
+                f"  jitter {r['jitter_rms']:5.2f}  lag {r['lag_ms']:5.0f}ms"
+            )
+        lines.append("")
+        lines.append("== " + t("tuning_recommendations") + " ==")
+        lines.extend(self._analysis["recommendations"])
+        self.report.setPlainText("\n".join(lines))
+        self.btn_apply.setEnabled(bool(self._analysis["changes"]))
+        self.btn_export.setEnabled(True)
+
+    def _on_apply(self):
+        if self._analysis and self._analysis["changes"]:
+            self._apply_changes(self._analysis["changes"])
+            self.lbl_status.setText(t("tuning_applied"))
+            if self._analysis["changes"].get("recenter"):
+                self._recenter()
+            self.btn_apply.setEnabled(False)
+
+    def _on_export(self):
+        if not self._recorder.samples:
+            return
+        path = export_tuning(self._recorder.samples, "", self._analysis)
+        self.lbl_status.setText(t("tuning_exported").format(path))
