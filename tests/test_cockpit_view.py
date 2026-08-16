@@ -70,6 +70,15 @@ def test_translation_moves_view():
     assert a != b
 
 
+def test_legacy_fov_zero_does_not_crash():
+    r = CockpitRenderer(fov_deg=0.0)  # legacy: 0 = use default
+    img = r.render(width=240, height=180)
+    assert not img.isNull()
+    r2 = CockpitRenderer(fov_deg=200.0)  # degenerate
+    img2 = r2.render(width=240, height=180)
+    assert not img2.isNull()
+
+
 if __name__ == "__main__":
     test_render_basic()
     print("PASS: neutral scene renders at requested size")
@@ -83,6 +92,8 @@ if __name__ == "__main__":
     print("PASS: extreme pose + translation renders")
     test_translation_moves_view()
     print("PASS: translation shifts the view")
+    test_legacy_fov_zero_does_not_crash()
+    print("PASS: legacy FOV=0 and degenerate FOV do not crash")
     test_render_raw_sent_overlay_differs()
     print("PASS: raw/sent overlay text differs")
     print("ALL COCKPIT VIEW TESTS PASSED")

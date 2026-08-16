@@ -92,7 +92,10 @@ class CockpitRenderer:
 
     def _draw_scene(self, painter, yaw_deg, pitch_deg, roll_deg, x_cm, y_cm, z_cm, width, height):
         w, h = float(width), float(height)
-        f = (h / 2.0) / math.tan(math.radians(self._fov_deg) / 2.0)
+        fov = self._fov_deg
+        if fov < 1.0 or fov > 170.0:
+            fov = 60.0  # legacy FOV=0 -> default; clamp degenerate values
+        f = (h / 2.0) / math.tan(math.radians(fov) / 2.0)
         cx, cy = w / 2.0, h / 2.0
         view = self._view_matrix(yaw_deg, pitch_deg, roll_deg)
         eye = np.array([x_cm / 100.0, EYE_HEIGHT + y_cm / 100.0, z_cm / 100.0])

@@ -1250,21 +1250,25 @@ class MainWindow(QMainWindow):
     def _on_demo_tick(self):
         """Synthetic head movement through the real mapping pipeline —
         validates sensitivity/curves/deadzone without any camera or game."""
-        if self.tracking_active:
+        try:
+            if self.tracking_active:
+                self._demo_timer.stop()
+                return
+            t0 = time.perf_counter()
+            raw = Pose(
+                yaw=25.0 * math.sin(2 * math.pi * 0.20 * t0),
+                pitch=12.0 * math.sin(2 * math.pi * 0.17 * t0 + 1.0),
+                roll=8.0 * math.sin(2 * math.pi * 0.13 * t0 + 2.0),
+                x=60.0 * math.sin(2 * math.pi * 0.10 * t0),
+                y=30.0 * math.sin(2 * math.pi * 0.09 * t0 + 0.5),
+                z=0.0,
+                confidence=1.0,
+            )
+            mapped = TrackingWorker._apply_mapping(raw, self.profile)
+            self._render_cockpit_preview(raw, mapped)
+        except Exception as e:
+            log.warning(f"Demo preview error: {e}")
             self._demo_timer.stop()
-            return
-        t0 = time.perf_counter()
-        raw = Pose(
-            yaw=25.0 * math.sin(2 * math.pi * 0.20 * t0),
-            pitch=12.0 * math.sin(2 * math.pi * 0.17 * t0 + 1.0),
-            roll=8.0 * math.sin(2 * math.pi * 0.13 * t0 + 2.0),
-            x=60.0 * math.sin(2 * math.pi * 0.10 * t0),
-            y=30.0 * math.sin(2 * math.pi * 0.09 * t0 + 0.5),
-            z=0.0,
-            confidence=1.0,
-        )
-        mapped = TrackingWorker._apply_mapping(raw, self.profile)
-        self._render_cockpit_preview(raw, mapped)
 
     # ── Tuning assistant ─────────────────────────────────────────────
     def _on_tuning_clicked(self):
