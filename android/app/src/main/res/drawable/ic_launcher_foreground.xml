@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- camera body -->
+    <path
+        android:fillColor="#37D5A3"
+        android:pathData="M33,44 h42 a7,7 0 0 1 7,7 v19 a7,7 0 0 1 -7,7 h-42 a7,7 0 0 1 -7,-7 v-19 a7,7 0 0 1 7,-7 z" />
+    <!-- top bump -->
+    <path
+        android:fillColor="#37D5A3"
+        android:pathData="M43,44 L47,39 h14 L65,44 z" />
+    <!-- lens -->
+    <path
+        android:fillColor="#1B1B2F"
+        android:pathData="M54,51 m-8,0 a8,8 0 1 1 16,0 a8,8 0 1 1 -16,0" />
+</vector>

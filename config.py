@@ -203,6 +203,7 @@ class AppSettings:
     mouse_stop_mode: str = "hold"
     mouse_hotkey: str = "f8"
     pose_smoothing: float = 0.6
+    mesh_detail: int = 2
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -225,7 +226,7 @@ class AppSettings:
             camera_fps=_bounded_int(data.get("camera_fps"), defaults.camera_fps, 1, 240),
             mirror=_json_bool(data.get("mirror"), defaults.mirror),
             camera_url=data.get("camera_url", "").strip() if _valid_camera_url(data.get("camera_url", "")) else "",
-            camera_source=data.get("camera_source") if data.get("camera_source") in {"local", "ip", "websocket"} else defaults.camera_source,
+            camera_source=data.get("camera_source") if data.get("camera_source") in {"local", "ip", "websocket", "usb"} else defaults.camera_source,
             camera_rotation=data.get("camera_rotation") if data.get("camera_rotation") in {0, 90, 180, 270} else defaults.camera_rotation,
             image_enhance=_json_bool(data.get("image_enhance"), defaults.image_enhance),
             cam_offset_x=_finite_float(data.get("cam_offset_x"), defaults.cam_offset_x, -200.0, 200.0),
@@ -243,6 +244,7 @@ class AppSettings:
             mouse_stop_mode=data.get("mouse_stop_mode") if data.get("mouse_stop_mode") in {"hold", "toggle"} else defaults.mouse_stop_mode,
             mouse_hotkey=_bounded_text(data.get("mouse_hotkey"), defaults.mouse_hotkey, maximum=32),
             pose_smoothing=_finite_float(data.get("pose_smoothing"), defaults.pose_smoothing, 0.0, 1.0),
+            mesh_detail=_bounded_int(data.get("mesh_detail"), defaults.mesh_detail, 0, 2),
         )
 
 

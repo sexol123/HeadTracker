@@ -4,3 +4,10 @@ __pycache__/
 *.pyc
 models/
 tests/out/
+
+# Android companion app
+android/.gradle/
+android/build/
+android/app/build/
+android/local.properties
+android/.kotlin/

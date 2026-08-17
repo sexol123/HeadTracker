@@ -6,11 +6,12 @@ Head tracking software for racing and flight simulators. Uses a regular USB webc
 
 - **6DOF head tracking** — Yaw, Pitch, Roll, X, Y, Z
 - **Webcam + IP + WebSocket cameras** — USB webcams, RTSP/HTTP IP streams, and phone WebSocket (MJPEG over ws) streams
+- **Android companion app** — `HeadTrackerCam` turns any Android phone into a low-latency wireless (Wi-Fi) or wired (USB via `android_usb.bat`) camera, streaming raw MJPEG over WebSocket with no protocol changes on the desktop
 - **Camera orientation** — Rotation (0°/90°/180°/270°) and mirror for sideways-mounted cameras
 - **FreeTrack 2.0 output** — Windows shared memory (Assetto Corsa, BeamNG, ETS2, DCS, 800+ games)
 - **UDP output** — Cross-platform network output (Linux, SteamOS, macOS)
 - **Mouse output** — Mouse-look or cursor control from head pose (velocity/absolute modes)
-- **Live overlay** — Face mesh, landmarks, and pose axes on camera preview
+- **Live overlay** — Face mesh with three detail levels (contours / medium / full, all drawn with thin 1 px lines), landmarks, and pose axes on camera preview
 - **Dual preview** — Camera feed and the cockpit (in-game) view are always shown together, one above the other, so raw tracking and the exact view the game receives are compared live; cockpit yaw mirrors the in-game direction
 - **Per-axis settings** — Sensitivity, deadzone, inversion for each axis
 - **Nonlinear response curves** — second bend point per axis (like opentrack): boost small movements without hitting the ceiling on large ones
@@ -43,7 +44,7 @@ Head tracking software for racing and flight simulators. Uses a regular USB webc
 
 - Windows 10/11, Linux, macOS, or SteamOS
 - Python 3.11+
-- USB webcam, IP camera, or a phone with a WebSocket stream app (e.g. DroidCam/IP Webcam)
+- USB webcam, IP camera, or a phone with the **HeadTrackerCam** app (or DroidCam/IP Webcam)
 
 ### Windows
 
@@ -170,7 +171,11 @@ tracking.
 The left column shows two stacked views at the same time. Top: the camera
 preview with the face mesh, pose axes, confidence bar, current FPS, and
 numbered boxes around every detected face — the tracked face is highlighted
-yellow. Bottom: the **cockpit preview** — a software-rendered in-game view
+yellow. The **Mesh detail** dropdown on the Camera tab picks the overlay
+density: *contours* (face oval + lips/eyes/brows), *medium* (every 4th mesh
+edge) or *full* (the complete 852-triangle mesh) — all drawn with thin 1px
+lines, so even the full mesh stays cheap to render. Bottom: the **cockpit
+preview** — a software-rendered in-game view
 fed with the exact values sent to the game (yaw mirrored the way the game
 shows it), with RAW/SENT readouts on top. When several faces are detected,
 the **Face** dropdown selects which one to track (tracking stays locked to
@@ -217,11 +222,60 @@ For RTSP/HTTP cameras:
 3. Press Start
 4. Stream Stats panel shows FPS, frame time, bandwidth, resolution, dropped frames
 
-For a phone used as a camera (e.g. IP Webcam, DroidCam, or a custom WebSocket stream):
+For a phone used as a camera (e.g. IP Webcam, DroidCam, or the bundled HeadTrackerCam app):
 
 1. Camera tab → Source: `WebSocket`
-2. Enter URL: `ws://192.168.1.100:8080` (raw MJPEG frames or JSON with a base64 image field)
+2. Enter URL: `ws://192.168.1.100:8080/ws` (raw MJPEG frames or JSON with a base64 image field)
 3. Press Start — frames are received over WebSocket and tracked as usual
+
+### Android Companion App (HeadTrackerCam)
+
+The bundled `android/` project turns an Android phone into a camera for
+HeadTracker. The phone runs a WebSocket server and pushes raw binary MJPEG
+frames (no base64) — the desktop `WebSocketCamera` decodes them directly.
+CameraX uses `STRATEGY_KEEP_ONLY_LATEST`, so the newest frame is always sent
+and nothing queues up between camera and encoder: end-to-end latency is one
+frame duration plus encode + network time. Frames are streamed in landscape
+orientation and the stream keeps running in the background (screen off or app
+minimized) — a partial wake lock keeps the phone from sleeping while the
+desktop is tracking.
+
+**Build and install** (requires Android SDK; produces `android/app/build/outputs/apk/debug/app-debug.apk`):
+
+```bash
+cd android
+gradlew.bat assembleDebug      # Windows
+./gradlew assembleDebug         # Linux / macOS
+adb install -r app/build/outputs/apk/debug/app-debug.apk
+```
+
+**Wi-Fi (wireless):** phone and PC on the same network (5 GHz recommended).
+Open the app, press **Start stream** — the screen shows the IP, port and the
+exact desktop URL (`ws://<phone-ip>:8080/ws`). Enter it in Camera tab → Source
+`WebSocket` and press Start.
+
+**USB (wired, lowest latency, no Wi-Fi needed):** enable USB debugging on the
+phone (Developer options), connect the cable, confirm the RSA dialog, then in
+HeadTracker pick Source **`USB Phone (HeadTrackerCam)`** on the Camera tab —
+the app detects adb, sets up the port forward automatically and shows the
+status right there (press **Setup USB bridge** to re-check anytime). The URL
+field is locked to `ws://127.0.0.1:8080/ws`; press Start and the frames flow
+over the cable. If the automatic setup cannot find adb, run the script
+manually once:
+
+| Platform | Command |
+|----------|---------|
+| Windows | `android_usb.bat` |
+| Linux / macOS | `./android_usb.sh` |
+
+The bridge survives replays: if the cable is unplugged, HeadTracker detects
+the dead stream and reconnects automatically.
+
+**Latency tips:** pick the lowest resolution that still tracks reliably
+(640x480 is a good default — MediaPipe tracks fine at 320x240 too), lower JPEG
+quality to 50 for less traffic, and use USB or 5 GHz Wi-Fi instead of 2.4 GHz.
+The app shows live encoder FPS; HeadTracker shows the received FPS and frame
+time in the Stream Stats panel.
 
 ### Camera Orientation
 
@@ -446,6 +500,10 @@ HeadTracker/
 ├── i18n.py                # Localization (en, ru, uk, de)
 ├── camera.py              # Webcam + IP camera capture, frame stats
 ├── tracker.py             # MediaPipe FaceLandmarker + PnP head pose
+├── android_usb.bat        # Android phone camera over USB (Windows; adb forward)
+├── android_usb.sh         # Android phone camera over USB (Linux/macOS)
+├── android/               # HeadTrackerCam — Android companion app (Kotlin, CameraX, WebSocket server)
+├── usb_bridge.py          # adb detection + port forward for the USB phone camera
 ├── filter.py              # AdaptivePoseFilter (Accela-style), One Euro, Exponential, Passthrough
 ├── worker.py              # Background tracking thread (QThread)
 ├── freetrack.py           # FreeTrack 2.0 shared memory (Windows-only)
@@ -457,7 +515,6 @@ HeadTracker/
 ├── profiles/              # User profiles (JSON; Default built-in)
 ├── settings.json          # App settings (auto-saved, gitignored)
 ├── logs/                  # Debug session logs (gitignored)
-├── ROADMAP.md             # Development roadmap
 ├── THIRD_PARTY_LICENSES   # Dependency licenses
 └── .gitignore
 ```

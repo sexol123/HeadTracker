@@ -3,28 +3,28 @@
   "axes": {
     "yaw": {
       "enabled": true,
-      "sensitivity": 1.0,
+      "sensitivity": 1.4,
       "deadzone": 0.5,
       "inverted": false,
       "curve": null
     },
     "pitch": {
       "enabled": true,
-      "sensitivity": 0.1,
+      "sensitivity": 1.4,
       "deadzone": 0.0,
       "inverted": false,
       "curve": null
     },
     "roll": {
       "enabled": true,
-      "sensitivity": 0.1,
+      "sensitivity": 1.4,
       "deadzone": 0.0,
       "inverted": false,
       "curve": null
     },
     "x": {
       "enabled": true,
-      "sensitivity": 0.7,
+      "sensitivity": 1.0,
       "deadzone": 0.0,
       "inverted": false,
       "curve": null
@@ -32,7 +32,7 @@
     "y": {
       "enabled": true,
       "sensitivity": 1.0,
-      "deadzone": 0.0,
+      "deadzone": 0.5,
       "inverted": false,
       "curve": null
     },
@@ -45,11 +45,11 @@
     }
   },
   "center_pose": {
-    "yaw": -4.334418776719711,
-    "pitch": 13.84736979845256,
-    "roll": -1.4753364264689939,
-    "x": -22.657260247952504,
-    "y": 26.659908434484574,
-    "z": -529.2092063582269
+    "yaw": 3.567554568649394,
+    "pitch": -14.540238499805275,
+    "roll": 5.766453328932644,
+    "x": -29.79704762864157,
+    "y": 505.9237408298981,
+    "z": 138.84945511736296
   }
 }

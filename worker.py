@@ -4,6 +4,7 @@ import time
 from PySide6.QtCore import QThread, Signal, QMutex, QMutexLocker
 
 from camera import Camera, WebSocketCamera, CameraFrame
+from usb_bridge import USB_URL
 from tracker import HeadTracker
 from pose import Pose
 from cam_calib import CameraCalibration
@@ -126,10 +127,10 @@ class TrackingWorker(QThread):
 
         # 1. Initialize Camera in background thread
         try:
-            if settings.camera_source == "websocket":
+            if settings.camera_source in ("websocket", "usb"):
                 camera = WebSocketCamera()
                 success = camera.start(
-                    url=settings.camera_url,
+                    url=settings.camera_url or (USB_URL if settings.camera_source == "usb" else ""),
                     mirror=settings.mirror,
                     rotation=settings.camera_rotation,
                     enhance=settings.image_enhance,
@@ -640,8 +641,11 @@ class TrackingWorker(QThread):
             rotation=settings.camera_rotation,
             enhance=settings.image_enhance,
         )
-        if settings.camera_source == "websocket":
-            return dict(url=settings.camera_url, **common)
+        if settings.camera_source in ("websocket", "usb"):
+            return dict(
+                url=settings.camera_url or (USB_URL if settings.camera_source == "usb" else ""),
+                **common,
+            )
         return dict(
             index=settings.camera_index,
             width=settings.camera_width,
