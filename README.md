@@ -16,6 +16,7 @@ Head tracking software for racing and flight simulators. Uses a regular USB webc
 - **Per-axis settings** — Sensitivity, deadzone, inversion for each axis
 - **Nonlinear response curves** — second bend point per axis (like opentrack): boost small movements without hitting the ceiling on large ones
 - **Multi-face selection** — when several people are in the frame, pick which face to track (stays locked to that person)
+- **Full-circle head tracking** — when the face is not visible (profile views, turning around), a BlazePose fallback tracks the head via nose/eyes/ears, keeping yaw continuous up to ±175° and switching seamlessly back when the face reappears
 - **Adaptive smoothing** — Accela-style pose filter: suppresses jitter and stays stable even when looking straight up, without slowing fast moves
 - **Degenerate pose rejection** — single-frame PnP spikes (impossible angles, ~1.7 m jumps) are held as the last valid pose instead of jerking the game view; confidence fades out so nothing bad is sent
 - **Calibration wizard** — guided setup: mark the camera position on the monitor, set center, record left/right/up/down head motions; measures direction, gain, jitter and lag per axis and proposes sensitivity/inversion/recenter changes
@@ -48,7 +49,7 @@ Head tracking software for racing and flight simulators. Uses a regular USB webc
 
 ### Windows
 
-Run `setup.bat` — it checks Python, installs pip dependencies, and downloads the face model:
+Run `setup.bat` — it checks Python, installs pip dependencies, and downloads the face model and the optional pose model (side-view fallback):
 
 ```bash
 setup.bat
@@ -123,8 +124,10 @@ run_tests.bat
 ```
 
 Each suite is a standalone script under `tests/` (exit code 0/1); screenshots
-go to `tests/out/`. Requires the MediaPipe model (`setup.bat` downloads it) and
-`models/` present. Optionally, with pytest installed, `pytest tests/` works too.
+go to `tests/out/`. Requires the MediaPipe models (`setup.bat` downloads them)
+and `models/` present. `test_pose_fallback.py` covers the side-view fallback
+(full-circle yaw, depth-branch alignment, source switching) and needs no model.
+Optionally, with pytest installed, `pytest tests/` works too.
 
 ## Usage
 
@@ -416,7 +419,7 @@ Language selector in the About tab. Changes apply instantly without restart:
 
 - FreeTrack shared memory is Windows-only — use **UDP output** on Linux/macOS
 - Camera uses V4L2 backend (Linux) or AVFoundation (macOS)
-- Face detection model downloaded by `setup.sh`
+- Face and pose (side-view fallback) models downloaded by `setup.sh`
 - SteamOS: run in desktop mode for camera access
 
 ### Troubleshooting
@@ -499,7 +502,7 @@ HeadTracker/
 ├── start.bat / start.sh   # Launch scripts (with terminal)
 ├── i18n.py                # Localization (en, ru, uk, de)
 ├── camera.py              # Webcam + IP camera capture, frame stats
-├── tracker.py             # MediaPipe FaceLandmarker + PnP head pose
+├── tracker.py             # MediaPipe FaceLandmarker + PnP head pose + BlazePose side-view fallback
 ├── android_usb.bat        # Android phone camera over USB (Windows; adb forward)
 ├── android_usb.sh         # Android phone camera over USB (Linux/macOS)
 ├── android/               # HeadTrackerCam — Android companion app (Kotlin, CameraX, WebSocket server)
@@ -511,7 +514,7 @@ HeadTracker/
 ├── config.py              # Profile, AxisConfig, AppSettings, JSON I/O
 ├── ui/
 │   └── main_window.py     # PySide6 GUI, overlay, profile management
-├── models/                # MediaPipe face_landmarker.task
+├── models/                # MediaPipe face_landmarker.task + pose_landmarker_full.task (side-view fallback)
 ├── profiles/              # User profiles (JSON; Default built-in)
 ├── settings.json          # App settings (auto-saved, gitignored)
 ├── logs/                  # Debug session logs (gitignored)
@@ -524,6 +527,7 @@ HeadTracker/
 | Component | Library | License |
 |-----------|---------|---------|
 | Face tracking | MediaPipe FaceLandmarker | Apache 2.0 |
+| Side-view fallback | MediaPipe PoseLandmarker (BlazePose) | Apache 2.0 |
 | Head pose | OpenCV solvePnP | Apache 2.0 |
 | GUI | PySide6 | LGPL v3 |
 | Camera | OpenCV | Apache 2.0 |

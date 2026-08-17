@@ -85,6 +85,19 @@ if not exist "models\face_landmarker.task" (
     )
 )
 
+if not exist "models\pose_landmarker_full.task" (
+    echo.
+    echo Downloading pose landmark model ^(side-view fallback^)...
+    %PYTHON% -c "import urllib.request; urllib.request.urlretrieve('https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task', 'models/pose_landmarker_full.task')"
+    if %errorlevel% neq 0 (
+        echo [WARNING] Model download failed ^(optional^). You can download it manually:
+        echo   https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task
+        echo   Place it in: models\pose_landmarker_full.task
+    ) else (
+        echo Pose model downloaded OK
+    )
+)
+
 :: ── Create logs dir ────────────────────────────────────────────
 mkdir logs 2>nul
 

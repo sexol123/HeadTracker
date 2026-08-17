@@ -45,6 +45,21 @@ else
     echo "[OK] Model downloaded"
 fi
 
+POSE_MODEL="models/pose_landmarker_full.task"
+if [ -f "$POSE_MODEL" ]; then
+    echo "[OK] Pose model already exists"
+else
+    echo "Downloading pose landmark model (side-view fallback)..."
+    curl -L -o "$POSE_MODEL" "https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task"
+    if [ $? -ne 0 ] || [ ! -s "$POSE_MODEL" ]; then
+        echo "[WARNING] Failed to download pose model (optional)."
+        echo "  Place it manually in: models/pose_landmarker_full.task"
+        rm -f "$POSE_MODEL"
+    else
+        echo "[OK] Pose model downloaded"
+    fi
+fi
+
 echo ""
 echo "=== Setup complete! ==="
 echo "Run: ./start.sh"

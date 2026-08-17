@@ -98,6 +98,8 @@ class FakeTracker(HeadTracker):
         self._last_good_time = 0.0
         self._reject_count = 0
         self._face_landmarker = landmarker
+        self._pose_landmarker = None
+        self._side_active = False
 
 
 class FakeLandmarker:
@@ -123,13 +125,13 @@ def test_reject_path_holds_last_pose():
     face = _mk_face()
 
     # Control the gate explicitly: first frame accepted, then all rejected
-    t._pose_is_sane = lambda pose, prev: True
+    t._pose_is_sane = lambda pose, prev, **kw: True
     t._face_landmarker._results = [[face]]
     good = t.process_frame(frame, 0.033, 160, 120)
     assert t._last_sane_pose is not None
     assert t._reject_count == 0
 
-    t._pose_is_sane = lambda pose, prev: False
+    t._pose_is_sane = lambda pose, prev, **kw: False
     t._face_landmarker._results = [[face]]
     first_rejected = t.process_frame(frame, 0.066, 160, 120)
     assert t._reject_count == 1
