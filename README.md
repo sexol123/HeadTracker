@@ -11,6 +11,7 @@ Head tracking software for racing and flight simulators. Uses a regular USB webc
 - **UDP output** — Cross-platform network output (Linux, SteamOS, macOS)
 - **Mouse output** — Mouse-look or cursor control from head pose (velocity/absolute modes)
 - **Live overlay** — Face mesh, landmarks, and pose axes on camera preview
+- **Dual preview** — Camera feed and the cockpit (in-game) view are always shown together, one above the other, so raw tracking and the exact view the game receives are compared live; cockpit yaw mirrors the in-game direction
 - **Per-axis settings** — Sensitivity, deadzone, inversion for each axis
 - **Nonlinear response curves** — second bend point per axis (like opentrack): boost small movements without hitting the ceiling on large ones
 - **Multi-face selection** — when several people are in the frame, pick which face to track (stays locked to that person)
@@ -34,6 +35,7 @@ Head tracking software for racing and flight simulators. Uses a regular USB webc
 - **Localization** — English, Russian, Ukrainian, German (language selector in About tab)
 - **Multi-platform** — Windows, Linux, macOS, SteamOS
 - **System tray** — Minimize to tray, start/stop tracking and exit from the tray menu
+- **Minimize auto-pause** — Minimizing the window pauses tracking (camera + inference stop, saving CPU); restoring the window resumes it automatically
 
 ## Quick Start
 
@@ -153,21 +155,28 @@ tracking.
 ┌──────────────────────────┬──────────────────────────┐
 │  Camera Preview          │  Tabs                    │
 │                          │  ┌────────────────────┐  │
-│  [Start] [Face: ▾]       │  │ Camera / Axes /    │  │
+│  Cockpit (in-game view)  │  │ Camera / Axes /    │  │
 │                          │  │ Output / Log /     │  │
-│  ┌───────┬─────────┐     │  │ About              │  │
-│  │ Pose  │  Info   │     │  └────────────────────┘  │
+│  [Demo] [Tuning]         │  │ About              │  │
+│  [Start] [Face: ▾]       │  └────────────────────┘  │
+│  ┌───────┬─────────┐     │                          │
+│  │ Pose  │  Info   │     │                          │
 │  │ Y/P/R │ Conf    │     │                          │
 │  │ X/Y/Z │ FPS     │     │                          │
 │  └───────┴─────────┘     │                          │
 └──────────────────────────┴──────────────────────────┘
 ```
 
-The preview shows the face mesh, pose axes, confidence bar, current FPS, and
+The left column shows two stacked views at the same time. Top: the camera
+preview with the face mesh, pose axes, confidence bar, current FPS, and
 numbered boxes around every detected face — the tracked face is highlighted
-yellow. When several faces are detected, the **Face** dropdown selects which
-one to track (tracking stays locked to that person even if the detection order
-changes).
+yellow. Bottom: the **cockpit preview** — a software-rendered in-game view
+fed with the exact values sent to the game (yaw mirrored the way the game
+shows it), with RAW/SENT readouts on top. When several faces are detected,
+the **Face** dropdown selects which one to track (tracking stays locked to
+that person even if the detection order changes). The **Demo** checkbox
+drives the cockpit through the real mapping pipeline without a camera or
+game, useful for checking sensitivity/curves.
 
 ### Axes Tab
 
@@ -332,6 +341,13 @@ sideways) does not move the cursor unexpectedly.
 > **Note:** some games read the mouse via Raw Input and ignore programmatically
 > injected movement (SendInput/pynput). Such games will not respond to Mouse output;
 > FreeTrack or UDP remain the reliable options there.
+
+### Minimizing
+
+Minimizing the window while tracking pauses tracking — the camera and
+inference stop, saving CPU resources; restoring the window resumes tracking
+automatically. Hiding to the system tray does **not** pause, so tracking
+keeps running in the background while you play.
 
 ### Exit Confirmation
 

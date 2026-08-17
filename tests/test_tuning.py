@@ -90,7 +90,18 @@ def test_inversion_detected():
     a = analyze_tuning(make_samples(gain=1.0, invert=True))
     rep = next(r for r in a["reports"] if r["axis"] == "yaw")
     assert rep["inverted"]
-    assert a["changes"]["axes"]["yaw"].get("inverted")
+    assert "inverted" not in a["changes"].get("axes", {}).get("yaw", {})
+    assert any("Inverted" in s for s in a["recommendations"])
+
+
+def test_high_gain_divide_before_multiply():
+    a = analyze_tuning(make_samples(gain=6.0))
+    rep = next(r for r in a["reports"] if r["axis"] == "yaw")
+    assert rep["gain"] > GAIN_HIGH
+    factor = a["changes"]["axes"]["yaw"]["sensitivity"]
+    assert 0.0 < factor < 1.0
+    assert abs(6.0 * factor - 1.0) < 0.05
+    assert any("divide" in s for s in a["recommendations"])
 
 
 def test_lag_detected():
@@ -109,6 +120,18 @@ def test_jitter_detected():
     rep = next(r for r in a["reports"] if r["axis"] == "yaw")
     assert rep["jitter_rms"] > JITTER_THRESHOLD_DEG
     assert a["changes"].get("pose_smoothing") == "increase"
+
+
+def test_fast_motion_not_reported_as_jitter():
+    samples = make_samples(n=300, gain=1.0)
+    for k, s in enumerate(samples):
+        raw = 20.0 if (k // 12) % 2 == 0 else -20.0
+        s["raw"]["yaw"] = raw
+        s["mapped"]["yaw"] = raw
+    a = analyze_tuning(samples)
+    rep = next(r for r in a["reports"] if r["axis"] == "yaw")
+    assert rep["jitter_rms"] < JITTER_THRESHOLD_DEG
+    assert a["changes"].get("pose_smoothing") != "increase"
 
 
 def test_drift_detected():
@@ -184,7 +207,9 @@ if __name__ == "__main__":
     test_low_gain_suggests_sensitivity()
     print("PASS: low gain detected, sensitivity suggested")
     test_inversion_detected()
-    print("PASS: inversion detected")
+    print("PASS: inversion detected, reported but never auto-changed")
+    test_high_gain_divide_before_multiply()
+    print("PASS: high gain suggests divide-by multiplier")
     test_lag_detected()
     print("PASS: lag detected, smoothing decrease suggested")
     test_jitter_detected()

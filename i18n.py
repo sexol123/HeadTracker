@@ -116,6 +116,7 @@ _translations = {
         # Cockpit preview & tuning assistant
         "preview_camera": "Camera",
         "preview_cockpit": "Cockpit (in-game view)",
+        "cockpit_preview": "Cockpit preview — the view the game camera gets",
         "demo_mode": "Demo move",
         "demo_mode_tip": "Synthetic head movement through the real mapping: check sensitivity/curves/deadzone without a camera or game",
         "tuning_btn": "Tuning assistant…",
@@ -136,6 +137,7 @@ _translations = {
         "tuning_applied": "Changes applied (also saved to profile/settings).",
         "tuning_exported": "Exported: {}",
         "tuning_invert": "{}: output moves opposite to the head — enable Inverted.",
+        "tuning_invert_note": "{}: Inverted is enabled — output direction is reversed. The assistant never changes Inverted automatically; toggle it in the main window if needed.",
         "tuning_gain_low": "{}: gain {} is low — multiply sensitivity by {}.",
         "tuning_gain_high": "{}: gain {} is high — divide sensitivity by {}.",
         "tuning_deadzone": "{}: output stays zero {}% of the time while moving — reduce the deadzone.",
@@ -366,6 +368,7 @@ _translations = {
         # Cockpit preview & tuning assistant
         "preview_camera": "Камера",
         "preview_cockpit": "Кабина (как в игре)",
+        "cockpit_preview": "Кокпит — вид, который получает игровая камера",
         "demo_mode": "Демо-движение",
         "demo_mode_tip": "Синтетическое движение головы через реальный маппинг: проверка чувствительности/кривых/мёртвой зоны без камеры и игры",
         "tuning_btn": "Помощник настройки…",
@@ -386,6 +389,7 @@ _translations = {
         "tuning_applied": "Изменения применены (сохранены в профиль/настройки).",
         "tuning_exported": "Экспортировано: {}",
         "tuning_invert": "{}: выход движется противоположно голове — включите «Инвертировать».",
+        "tuning_invert_note": "{}: включена инверсия — направление вывода развёрнуто. Ассистент никогда не меняет «Инвертировать» автоматически; при необходимости переключите вручную в главном окне.",
         "tuning_gain_low": "{}: усиление {} мало — умножьте чувствительность на {}.",
         "tuning_gain_high": "{}: усиление {} велико — разделите чувствительность на {}.",
         "tuning_deadzone": "{}: выход остаётся нулевым {}% времени при движении — уменьшите мёртвую зону.",

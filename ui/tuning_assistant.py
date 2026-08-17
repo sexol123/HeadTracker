@@ -27,6 +27,9 @@ MAX_LAG_MS = 400           # cross-correlation search window
 LAG_THRESHOLD_MS = 90      # above this, smoothing feels laggy
 JITTER_THRESHOLD_DEG = 1.2  # rms of high-freq residual -> "jittery"
 JITTER_THRESHOLD_MM = 12.0
+JITTER_QUIET_SPEED_DEG = 1.0  # max per-frame raw delta counted as "still"
+JITTER_QUIET_SPEED_MM = 10.0  # (else intentional motion reads as jitter)
+MIN_JITTER_SAMPLES = 8
 DEADZONE_MOVING_FRAC = 0.15  # mapped ~0 while clearly moving -> deadzone too big
 DRIFT_THRESHOLD_DEG = 5.0    # mean raw angle offset -> recenter / drift
 MIN_CONFIDENCE = 0.5         # below this the pipeline holds a stale pose
@@ -123,12 +126,24 @@ def _axis_report(samples: list[dict], axis: str) -> dict:
     if moving.sum() >= 10:
         report["deadzone_frac"] = float(np.mean(np.abs(mapped[moving]) < 0.3))
 
-    # Jitter: rms of high-frequency residual of the mapped signal
+    # Jitter: rms of high-frequency residual of the mapped signal, evaluated
+    # only over near-stationary segments (plus a margin). Intentional head
+    # motion has a large smooth residual and would otherwise be misread as
+    # tracking jitter, which then over-recommends smoothing.
     if n > JITTER_WINDOW + 2:
         kernel = np.ones(JITTER_WINDOW) / JITTER_WINDOW
         smooth = np.convolve(mapped, kernel, mode="same")
         residual = mapped - smooth
-        report["jitter_rms"] = _rms(residual)
+        speed_thr = JITTER_QUIET_SPEED_DEG if is_angle else JITTER_QUIET_SPEED_MM
+        d = np.abs(np.diff(raw))
+        fast = np.zeros(n)
+        fast[1:] += (d >= speed_thr).astype(float)
+        fast[:-1] += (d >= speed_thr).astype(float)
+        margin = JITTER_WINDOW // 2
+        neighbors = np.convolve(fast, np.ones(2 * margin + 1), mode="same")
+        quiet = neighbors < 0.5
+        if quiet.sum() >= MIN_JITTER_SAMPLES:
+            report["jitter_rms"] = _rms(residual[quiet])
 
     # Lag via cross-correlation (mapped vs raw), capped search window
     lag = 0
@@ -194,17 +209,16 @@ def analyze_tuning(samples: list[dict]) -> dict:
     for r in reports:
         axis = r["axis"]
         if r["inverted"]:
-            recommendations.append(t("tuning_invert").format(axis))
-            changes.setdefault("axes", {})[axis] = {"inverted": True}
+            recommendations.append(t("tuning_invert_note").format(axis))
         if r["gain"] is not None:
             if r["gain"] < GAIN_LOW:
                 factor = round(1.0 / r["gain"], 2)
                 recommendations.append(t("tuning_gain_low").format(axis, f"{r['gain']:.2f}", factor))
                 changes.setdefault("axes", {})[axis] = {"sensitivity": factor}
             elif r["gain"] > GAIN_HIGH:
-                factor = round(r["gain"], 2)
-                recommendations.append(t("tuning_gain_high").format(axis, f"{r['gain']:.2f}", factor))
-                changes.setdefault("axes", {})[axis] = {"sensitivity": factor}
+                divisor = round(r["gain"], 2)
+                recommendations.append(t("tuning_gain_high").format(axis, f"{r['gain']:.2f}", divisor))
+                changes.setdefault("axes", {})[axis] = {"sensitivity": round(1.0 / r["gain"], 2)}
         if r["deadzone_frac"] > DEADZONE_MOVING_FRAC:
             recommendations.append(t("tuning_deadzone").format(axis, f"{r['deadzone_frac'] * 100:.0f}"))
         if r["lag_ms"] > LAG_THRESHOLD_MS:
@@ -271,12 +285,11 @@ def analyze_calibration(segments: list[dict]) -> dict:
                 recommendations.append(t("tuning_gain_low").format(axis, f"{gain:.2f}", factor))
                 changes.setdefault("axes", {})[axis] = {"sensitivity": factor}
             elif gain > GAIN_HIGH:
-                factor = round(gain, 2)
-                recommendations.append(t("tuning_gain_high").format(axis, f"{gain:.2f}", factor))
-                changes.setdefault("axes", {})[axis] = {"sensitivity": factor}
+                divisor = round(gain, 2)
+                recommendations.append(t("tuning_gain_high").format(axis, f"{gain:.2f}", divisor))
+                changes.setdefault("axes", {})[axis] = {"sensitivity": round(1.0 / gain, 2)}
         if all(r["inverted"] for r in rs):
-            recommendations.append(t("tuning_invert").format(axis))
-            changes.setdefault("axes", {}).setdefault(axis, {})["inverted"] = True
+            recommendations.append(t("tuning_invert_note").format(axis))
         if any(r["deadzone_frac"] > DEADZONE_MOVING_FRAC for r in rs):
             worst = max(r["deadzone_frac"] for r in rs)
             recommendations.append(t("tuning_deadzone").format(axis, f"{worst * 100:.0f}"))

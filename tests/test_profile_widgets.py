@@ -26,15 +26,15 @@ win = MainWindow(loaded)
 win.show()
 app.processEvents()
 
-expected_sens = {"yaw": 6.0, "pitch": 6.0, "roll": 6.0, "x": 1.0, "y": 1.0, "z": 1.0}
+expected_sens = {n: a.sensitivity for n, a in loaded.axes.items()}
 widget_sens = {n: w["sensitivity"].value() for n, w in win._axis_widgets.items()}
-assert widget_sens == expected_sens, f"widget sens {widget_sens} != {expected_sens}"
+assert widget_sens == expected_sens, f"widget sens {widget_sens} != profile {expected_sens}"
 print("A1. axis widgets populated from loaded profile OK")
 
 profile_sens = {n: a.sensitivity for n, a in win.profile.axes.items()}
 assert profile_sens == expected_sens, f"profile corrupted to {profile_sens}"
 for n, a in win.profile.axes.items():
-    assert a.deadzone == 0.5, f"deadzone {n} corrupted to {a.deadzone}"
+    assert a.deadzone == loaded.axes[n].deadzone, f"deadzone {n} corrupted to {a.deadzone}"
 print("A2. in-memory profile not corrupted by widget population OK")
 
 assert win._current_profile_path is not None, "profile path not set at startup"

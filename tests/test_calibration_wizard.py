@@ -49,11 +49,12 @@ assert a["changes"]["axes"]["yaw"]["sensitivity"] == 2.0, a["changes"]
 assert "pitch" not in a["changes"].get("axes", {}), a["changes"]
 print("1. gain 0.5 -> yaw factor 2.0, pitch untouched OK")
 
-# 2. inverted -> change
+# 2. inverted -> reported in recommendations, never auto-changed
 a = analyze_calibration(segments_for(k=-0.5))
 assert a["ok"]
-assert a["changes"]["axes"]["yaw"].get("inverted") is True, a["changes"]
-print("2. inverted detection OK:", a["changes"]["axes"]["yaw"])
+assert "inverted" not in a["changes"].get("axes", {}).get("yaw", {}), a["changes"]
+assert any("«Инвертировать»" in s or "Inverted" in s for s in a["recommendations"])
+print("2. inverted detection OK (no auto-change):", a["changes"])
 
 # 3. insufficient data -> ok False, empty changes
 poor = [{"dir": d, "samples": make_samples(5, axis)} for d, axis in (("left", "yaw"), ("right", "yaw"), ("up", "pitch"), ("down", "pitch"))]
