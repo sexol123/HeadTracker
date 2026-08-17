@@ -16,6 +16,7 @@ from worker import TrackingWorker
 from camera import Camera
 from tracker import Pose
 from freetrack import IS_WINDOWS
+from qobject_diag import track_obj
 from ui.stats_graph import StatsGraph
 from ui.cockpit_view import CockpitRenderer
 from ui.tuning_assistant import TuningRecorder, TuningDialog
@@ -69,6 +70,7 @@ class MainWindow(QMainWindow):
         self.app_settings = load_settings()
         self._pulse_splash()
         self.worker = TrackingWorker()
+        track_obj(self.worker, "worker")
         self.worker.connecting.connect(self._on_worker_connecting)
         self.worker.started_signal.connect(self._on_worker_started)
         self.worker.frame_ready.connect(self._on_worker_frame)
@@ -94,7 +96,12 @@ class MainWindow(QMainWindow):
         self._last_preview_buf = None
         self._preview_mode = "camera"
         self._cockpit_renderer = CockpitRenderer()
+        track_obj(self._cockpit_renderer, "cockpit_renderer")
         self._tuning_recorder = TuningRecorder()
+        self._wizard_recorder = TuningRecorder()
+        self._tuning_dialog = None
+        self._calibration_wizard = None
+        self._modal_dialog_open = False
         self._demo_timer = QTimer(self)
         self._demo_timer.setInterval(33)
         self._demo_timer.timeout.connect(self._on_demo_tick)
@@ -142,6 +149,7 @@ class MainWindow(QMainWindow):
             return
         icon = QIcon(str(ICON_PATH)) if ICON_PATH.exists() else self.windowIcon()
         self.tray_icon = QSystemTrayIcon(icon, self)
+        track_obj(self.tray_icon, "tray_icon")
         self.tray_icon.setToolTip("HeadTracker")
 
         tray_menu = QMenu(self)
@@ -210,8 +218,14 @@ class MainWindow(QMainWindow):
         self.btn_start.setStyleSheet("QPushButton { background-color: #2ecc71; color: white; font-weight: bold; } QPushButton:hover { background-color: #27ae60; }")
         self.btn_start.clicked.connect(self._on_start_stop)
         controls_layout.addWidget(self.btn_start)
+        self.btn_calibrate = QPushButton(t("btn_calibrate"))
+        self.btn_calibrate.setFixedHeight(36)
+        self.btn_calibrate.setToolTip(t("btn_calibrate_tip"))
+        self.btn_calibrate.clicked.connect(self._on_calibrate)
+        controls_layout.addWidget(self.btn_calibrate)
         self.lbl_face_title = QLabel(t("face_select"))
         self.combo_face = QComboBox()
+        track_obj(self.combo_face, "combo_face")
         self.combo_face.setEnabled(False)
         self.combo_face.setToolTip(t("face_select_tip"))
         self.lbl_face_title.setToolTip(t("face_select_tip"))
@@ -287,6 +301,7 @@ class MainWindow(QMainWindow):
         self._build_about_tab()
         splitter.addWidget(right_panel)
         splitter.setSizes([520, 440])
+        track_obj(self, "main_window")
 
     def _build_profile_tab(self):
         pass
@@ -581,6 +596,7 @@ class MainWindow(QMainWindow):
         self._perf_graph_title = QLabel(t("perf_graph"))
         layout.addWidget(self._perf_graph_title)
         self.stats_graph = StatsGraph()
+        track_obj(self.stats_graph, "stats_graph")
         layout.addWidget(self.stats_graph)
         self._diagnostics_group = QGroupBox(t("diagnostics"))
         diagnostics_form = QFormLayout(self._diagnostics_group)
@@ -596,6 +612,7 @@ class MainWindow(QMainWindow):
             self._diagnostic_values[key] = value
         layout.addWidget(self._diagnostics_group)
         self.log_text = QTextEdit(); self.log_text.setReadOnly(True)
+        track_obj(self.log_text, "log_text")
         self.log_text.setFont(QFont("Consolas", 9))
         self.log_text.setStyleSheet("background-color: #1e1e1e; color: #d4d4d4;")
         layout.addWidget(self.log_text)
@@ -707,6 +724,7 @@ class MainWindow(QMainWindow):
         self._update_window_title()
         self.preview_label.setText(t("camera_preview"))
         self.btn_start.setText(t("btn_stop") if self.tracking_active else t("btn_start"))
+        self.btn_calibrate.setText(t("btn_calibrate"))
         self.btn_new.setText(t("btn_new"))
         self.btn_delete.setText(t("btn_delete"))
         self.tabs.setTabText(0, t("tab_camera"))
@@ -1184,6 +1202,8 @@ class MainWindow(QMainWindow):
     @Slot(object)
     def _on_worker_frame(self, frame):
         try:
+            if self._modal_dialog_open:
+                return
             now = time.perf_counter()
             if now - self._last_preview_update < 1.0 / PREVIEW_MAX_FPS:
                 return
@@ -1272,13 +1292,24 @@ class MainWindow(QMainWindow):
 
     # ── Tuning assistant ─────────────────────────────────────────────
     def _on_tuning_clicked(self):
-        dlg = TuningDialog(
-            self._tuning_recorder,
-            self._apply_tuning_changes,
-            self._recenter_for_tuning,
-            parent=self,
-        )
-        dlg.exec()
+        # Reuse one dialog instance: recreating a QTextEdit-bearing dialog
+        # from scratch re-registers it with the Windows text-services /
+        # DirectWrite pipeline, and the stale native state from the previous
+        # instance caused native access violations in Qt6Gui inside the
+        # modal event loop (crash_native_2026-08-16_15-10-06.log).
+        if self._tuning_dialog is None:
+            self._tuning_dialog = TuningDialog(
+                self._tuning_recorder,
+                self._apply_tuning_changes,
+                self._recenter_for_tuning,
+                parent=self,
+            )
+            track_obj(self._tuning_dialog, "tuning_dialog")
+        self._modal_dialog_open = True
+        try:
+            self._tuning_dialog.exec()
+        finally:
+            self._modal_dialog_open = False
 
     def _apply_tuning_changes(self, changes: dict):
         s = self.app_settings
@@ -1310,6 +1341,50 @@ class MainWindow(QMainWindow):
     def _recenter_for_tuning(self):
         ok = self.worker.recenter_camera()
         log.info("Tuning recenter: %s", "ok" if ok else "skipped (no face)" )
+
+    # ── Calibration wizard ───────────────────────────────────────────
+    def _on_calibrate(self):
+        if self._calibration_wizard is None:
+            from ui.calibration_wizard import CalibrationWizard
+            self._calibration_wizard = CalibrationWizard(
+                recorder=self._wizard_recorder,
+                worker=self.worker,
+                start_tracking=self._start_tracking,
+                stop_tracking=self._stop_tracking,
+                tracking_active=lambda: self.tracking_active,
+                recenter_save=self._calibration_recenter,
+                apply_changes=self._apply_tuning_changes,
+                apply_cam=self._apply_cam_from_wizard,
+                profile_name=lambda: self.profile.name,
+                parent=self,
+            )
+            track_obj(self._calibration_wizard, "calibration_wizard")
+        self._modal_dialog_open = True
+        try:
+            self._calibration_wizard.exec()
+        finally:
+            self._modal_dialog_open = False
+
+    def _calibration_recenter(self) -> bool:
+        """Recenter and persist the neutral pose into the profile."""
+        if not self.worker.recenter_camera():
+            return False
+        pose = self.worker.get_raw_pose()
+        self.profile.center_pose = {
+            "yaw": pose.yaw, "pitch": pose.pitch, "roll": pose.roll,
+            "x": pose.x, "y": pose.y, "z": pose.z,
+        }
+        self._profile_autosave_timer.start()
+        log.info(f"Calibration center saved to profile: {self.profile.name}")
+        return True
+
+    def _apply_cam_from_wizard(self, ox, oy, oz, yaw, pitch, roll):
+        self.spin_cam_offset_x.setValue(round(ox, 1))
+        self.spin_cam_offset_y.setValue(round(oy, 1))
+        self.spin_cam_offset_z.setValue(round(oz, 1))
+        self.spin_cam_yaw.setValue(round(yaw, 1))
+        self.spin_cam_pitch.setValue(round(pitch, 1))
+        self.spin_cam_roll.setValue(round(roll, 1))
 
     @Slot(object)
     def _on_worker_faces(self, faces):
@@ -1399,6 +1474,8 @@ class MainWindow(QMainWindow):
         self.lbl_z.setText(f"{pose.z:+.1f}")
         if self._tuning_recorder.recording:
             self._tuning_recorder.add(self.worker.get_raw_pose(), pose)
+        if self._wizard_recorder.recording:
+            self._wizard_recorder.add(self.worker.get_raw_pose(), pose)
 
     @Slot(float)
     def _on_worker_confidence(self, confidence):

@@ -118,6 +118,35 @@ def test_drift_detected():
     assert a["changes"].get("recenter")
 
 
+def test_low_confidence_frames_removed():
+    samples = make_samples(n=200)
+    for s in samples[100:]:
+        s["confidence"] = 0.1
+    a = analyze_tuning(samples)
+    assert a["count"] == 100
+    assert a["dropped"] == 100
+
+
+def test_spike_frame_removed():
+    samples = make_samples(n=200)
+    samples[100]["raw"]["yaw"] += 60.0
+    samples[100]["mapped"]["yaw"] += 60.0
+    a = analyze_tuning(samples)
+    assert a["dropped"] == 1
+    rep = next(r for r in a["reports"] if r["axis"] == "yaw")
+    assert rep["raw_range"] < 50.0
+
+
+def test_translation_drift_never_recenters():
+    samples = make_samples(gain=1.0)
+    for s in samples:
+        s["raw"]["x"] = 100.0 + 5.0 * math.sin(2 * math.pi * 0.4 * s["t"])
+        s["mapped"]["x"] = s["raw"]["x"]
+    a = analyze_tuning(samples)
+    assert "recenter" not in a["changes"]
+    assert not any(r.startswith("x:") for r in a["recommendations"])
+
+
 def test_recorder():
     rec = TuningRecorder()
     assert not rec.recording
@@ -162,6 +191,12 @@ if __name__ == "__main__":
     print("PASS: jitter detected, smoothing increase suggested")
     test_drift_detected()
     print("PASS: drift detected, recenter suggested")
+    test_low_confidence_frames_removed()
+    print("PASS: low-confidence frames dropped")
+    test_spike_frame_removed()
+    print("PASS: spike frame dropped")
+    test_translation_drift_never_recenters()
+    print("PASS: x/y/z offset never triggers recenter")
     test_recorder()
     print("PASS: recorder stores raw/mapped only while recording")
     test_export()

@@ -173,12 +173,17 @@ def main():
     app = QApplication(sys.argv)
     log.info("QApplication created")
 
+    import qobject_diag
+    qobject_diag.init()
+    qobject_diag.track_obj(app, "QApplication")
+
     if ICON_PATH.exists():
         app_icon = QIcon(str(ICON_PATH))
         app.setWindowIcon(app_icon)
         log.info(f"App icon loaded from {ICON_PATH.name}")
 
     splash = QSplashScreen(draw_splash("."))
+    qobject_diag.track_obj(splash, "splash")
     splash.show()
     app.processEvents()
 

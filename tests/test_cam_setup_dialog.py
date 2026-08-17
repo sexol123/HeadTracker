@@ -6,113 +6,90 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
 from PySide6.QtWidgets import QApplication
-from PySide6.QtCore import Qt, QPoint
+from PySide6.QtCore import Qt, QPoint, QPointF
 from PySide6.QtTest import QTest
-from ui.cam_setup_dialog import CamSetupDialog, SetupView
+from ui.cam_setup_dialog import CamSetupDialog, CAM_DEFAULT
 
 app = QApplication([])
 
 pitch_dlg = math.degrees(math.atan2(15.0, 10.0))     # 56.31
 yaw_dlg = math.degrees(math.asin(30.0 / 35.0))       # 59.0
 applied = []
-dlg = CamSetupDialog(offset_x_cm=-30, offset_y_cm=15, offset_z_cm=50, yaw=round(yaw_dlg, 1), pitch=round(pitch_dlg, 1), roll=0)
+dlg = CamSetupDialog(offset_x_cm=-30, offset_y_cm=15, offset_z_cm=50,
+                     yaw=round(yaw_dlg, 1), pitch=round(pitch_dlg, 1), roll=4)
 dlg.apply_callback = lambda *v: applied.append(v)
+v = dlg.view
 
+# 1. initial values: point from offsets, auto-aim + passthrough oz/roll
 ox, oy, oz, yaw, pitch, roll = dlg._values()
 assert abs(ox + 30) < 0.01 and abs(oy - 15) < 0.01 and abs(oz - 50) < 0.01, (ox, oy, oz)
 assert abs(yaw - yaw_dlg) < 0.5 and abs(pitch - pitch_dlg) < 0.5, (yaw, pitch)
-assert dlg.chk_auto_aim.isChecked(), "auto-aim should be on for matched angles"
-print("1. initial values OK:", tuple(round(v, 2) for v in dlg._values()))
+assert roll == 4.0, roll
+print("1. initial values OK:", tuple(round(x, 2) for x in dlg._values()))
 
-v = dlg.view_top
-QTest.mousePress(v, Qt.LeftButton, pos=QPoint(120, 180))
-QTest.mouseMove(v, QPoint(210, 180))
-QTest.mouseRelease(v, Qt.LeftButton, pos=QPoint(210, 180))
+# 2. pixel <-> cm mapping round-trip
+p = v._to_px(10.0, 20.0)
+r = v._from_px(p)
+assert abs(r.x() - 10.0) < 0.5 and abs(r.y() - 20.0) < 0.5, r
+print("2. mapping round-trip OK:", (round(r.x(), 1), round(r.y(), 1)))
+
+# 2b. clicking the screen center places the marker at the origin
+sc = v.screen_rect()
+center_px = QPoint(int(sc.center().x()), int(sc.center().y()))
+QTest.mousePress(v, Qt.LeftButton, pos=center_px)
+QTest.mouseRelease(v, Qt.LeftButton, pos=center_px)
+ox, oy, *_ = dlg._values()
+assert abs(ox) < 0.5 and abs(oy) < 0.5, (ox, oy)
+print("2b. screen center -> origin OK:", (round(ox, 2), round(oy, 2)))
+
+# 3. click on the screen moves the camera point
+goal = QPoint(int(v._to_px(40.0, -5.0).x()), int(v._to_px(40.0, -5.0).y()))
+QTest.mousePress(v, Qt.LeftButton, pos=goal)
+QTest.mouseRelease(v, Qt.LeftButton, pos=goal)
 ox, oy, oz, yaw, pitch, roll = dlg._values()
-assert abs(ox) < 0.01 and abs(yaw) < 0.5, (ox, yaw)
-print("2. drag cam top -> center OK, yaw:", round(yaw, 2))
+assert abs(ox - 40.0) < 1.0 and abs(oy + 5.0) < 1.0, (ox, oy)
+assert abs(oz - 50.0) < 0.01, "oz must pass through untouched"
+assert abs(roll - 4.0) < 0.01, "roll must pass through untouched"
+print("3. click places camera OK:", (round(ox, 1), round(oy, 1)))
 
-v = dlg.view_side
-a = math.radians(v.angle)
-cam_px = v._to_px(v.cam)
-d = v._axis_dir()
-handle = QPoint(int(cam_px.x() - 40 * d.x()), int(cam_px.y() - 40 * d.y()))
-dlg.chk_auto_aim.setChecked(False)
-QTest.mousePress(v, Qt.LeftButton, pos=handle)
-QTest.mouseMove(v, QPoint(int(cam_px.x()), int(cam_px.y() - 46)))
-QTest.mouseRelease(v, Qt.LeftButton, pos=QPoint(int(cam_px.x()), int(cam_px.y() - 46)))
-ox, oy, oz, yaw, pitch, roll = dlg._values()
-assert abs(pitch + 90) < 1.0, pitch
-print("4. rot handle manual OK, pitch:", round(pitch, 2))
+# 4. drag follows the cursor
+px0 = v._to_px(v.cam.x(), v.cam.y())
+drag_goal = QPoint(int(px0.x()) + 50, int(px0.y()) + 40)
+exp = v._from_px(QPointF(drag_goal))
+QTest.mousePress(v, Qt.LeftButton, pos=QPoint(int(px0.x()), int(px0.y())))
+QTest.mouseMove(v, drag_goal)
+QTest.mouseRelease(v, Qt.LeftButton, pos=drag_goal)
+ox, oy, *_ = dlg._values()
+assert abs(ox - exp.x()) < 0.5 and abs(oy - exp.y()) < 0.5, (ox, oy, exp)
+print("4. drag moves camera OK:", (round(ox, 1), round(oy, 1)))
 
-dlg.chk_auto_aim.setChecked(True)
-v = dlg.view_side
-QTest.mousePress(v, Qt.LeftButton, pos=QPoint(240, 150))
-QTest.mouseMove(v, QPoint(300, 150))
-QTest.mouseRelease(v, Qt.LeftButton, pos=QPoint(300, 150))
-ox, oy, oz, yaw, pitch, roll = dlg._values()
-assert abs(v.head.x() - 80) < 0.01 and abs(v.head.y()) < 0.01, v.head
-assert abs(pitch - 26.57) < 1.0, pitch
-print("5. drag head side OK, pitch:", round(pitch, 2), "head:", (round(v.head.x(), 1), round(v.head.y(), 1)))
+# 5. clicks outside the monitor are ignored
+QTest.mousePress(v, Qt.LeftButton, pos=QPoint(5, 150))
+QTest.mouseRelease(v, Qt.LeftButton, pos=QPoint(5, 150))
+ox, oy, *_ = dlg._values()
+assert abs(ox - exp.x()) < 0.5, "camera must not move on outside click"
+print("5. outside click ignored OK")
 
-dlg.slider_roll.setValue(12)
-ox, oy, oz, yaw, pitch, roll = dlg._values()
-assert roll == 12
-print("5. roll slider OK:", roll)
-
+# 6. reset -> top-center default
 dlg._on_reset()
 ox, oy, oz, yaw, pitch, roll = dlg._values()
-assert abs(ox) < 0.01 and abs(oy - 15) < 0.01 and abs(oz - 50) < 0.01 and roll == 0, dlg._values()
-print("6. reset OK:", tuple(round(v, 2) for v in dlg._values()))
+assert ox == CAM_DEFAULT[0] and abs(oy - CAM_DEFAULT[1]) < 0.01, (ox, oy)
+assert oz == CAM_DEFAULT[2] and roll == 0.0, (oz, roll)
+print("6. reset OK:", tuple(round(x, 2) for x in dlg._values()))
+
+# 7. fresh dialog -> defaults
+d2 = CamSetupDialog()
+ox, oy, oz, *_ = d2._values()
+assert abs(ox - CAM_DEFAULT[0]) < 0.01 and abs(oy - CAM_DEFAULT[1]) < 0.01 and oz == CAM_DEFAULT[2]
+print("7. fresh defaults OK")
 
 assert len(applied) > 0, "apply_callback never fired"
-print("7. apply_callback fired", len(applied), "times")
-
-print("-- consistency between views --")
-d2 = CamSetupDialog()
-vt, vs = d2.view_top, d2.view_side
-
-def assert_synced(tag):
-    assert abs(vt.cam.y() - vs.cam.x()) < 0.01, f"{tag}: cam z desync top={vt.cam.y():.2f} side={vs.cam.x():.2f}"
-    assert abs(vt.head.y() - vs.head.x()) < 0.01, f"{tag}: head z desync"
-    ox, oy, oz, *_ = d2._values()
-    assert abs(oz - vt.cam.y()) < 0.01 and abs(oz - vs.cam.x()) < 0.01, f"{tag}: oz {oz} != cam z"
-    assert abs(ox - vt.cam.x()) < 0.01, f"{tag}: ox {ox} != top x {vt.cam.x()}"
-    assert abs(oy - vs.cam.y()) < 0.01, f"{tag}: oy {oy} != side y {vs.cam.y()}"
-
-assert_synced("initial")
-QTest.mousePress(vt, Qt.LeftButton, pos=QPoint(210, 180))
-QTest.mouseMove(vt, QPoint(330, 240))
-QTest.mouseRelease(vt, Qt.LeftButton, pos=QPoint(330, 240))
-assert abs(vt.cam.x() - 40) < 0.01 and abs(vt.cam.y() - 70) < 0.01, vt.cam
-assert abs(vs.cam.x() - 70) < 0.01 and abs(vs.cam.y() - 15) < 0.01, vs.cam
-assert_synced("after top cam drag")
-print("top cam drag -> side mirrored:", (round(vt.cam.x(), 1), round(vt.cam.y(), 1)), (round(vs.cam.x(), 1), round(vs.cam.y(), 1)))
-
-QTest.mousePress(vs, Qt.LeftButton, pos=QPoint(270, 105))
-QTest.mouseMove(vs, QPoint(360, 120))
-QTest.mouseRelease(vs, Qt.LeftButton, pos=QPoint(360, 120))
-assert abs(vs.cam.x() - 100) < 0.01 and abs(vs.cam.y() - 10) < 0.01, vs.cam
-assert abs(vt.cam.y() - 100) < 0.01, vt.cam
-assert_synced("after side cam drag")
-print("side cam drag -> top mirrored:", (round(vt.cam.x(), 1), round(vt.cam.y(), 1)), (round(vs.cam.x(), 1), round(vs.cam.y(), 1)))
-
-QTest.mousePress(vt, Qt.LeftButton, pos=QPoint(210, 210))
-QTest.mouseMove(vt, QPoint(210, 300))
-QTest.mouseRelease(vt, Qt.LeftButton, pos=QPoint(210, 300))
-assert abs(vt.head.y() - 90) < 0.01 and abs(vs.head.x() - 90) < 0.01, (vt.head, vs.head)
-assert_synced("after top head drag")
-print("top head drag -> side mirrored:", (round(vt.head.x(), 1), round(vt.head.y(), 1)), (round(vs.head.x(), 1), round(vs.head.y(), 1)))
-
-d2._on_reset()
-assert_synced("after reset")
-print("reset consistent:", tuple(round(v, 1) for v in d2._values())[:3])
-print("CONSISTENCY TESTS PASSED")
+print("8. apply_callback fired", len(applied), "times")
 
 out_dir = os.path.join(os.path.dirname(__file__), "out")
 os.makedirs(out_dir, exist_ok=True)
 png = os.path.join(out_dir, "cam_setup_dialog.png")
 dlg.resize(dlg.sizeHint())
 dlg.grab().save(png)
-print("8. screenshot saved:", png)
+print("9. screenshot saved:", png)
 print("ALL DIALOG TESTS PASSED")

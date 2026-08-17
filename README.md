@@ -15,6 +15,9 @@ Head tracking software for racing and flight simulators. Uses a regular USB webc
 - **Nonlinear response curves** — second bend point per axis (like opentrack): boost small movements without hitting the ceiling on large ones
 - **Multi-face selection** — when several people are in the frame, pick which face to track (stays locked to that person)
 - **Adaptive smoothing** — Accela-style pose filter: suppresses jitter and stays stable even when looking straight up, without slowing fast moves
+- **Degenerate pose rejection** — single-frame PnP spikes (impossible angles, ~1.7 m jumps) are held as the last valid pose instead of jerking the game view; confidence fades out so nothing bad is sent
+- **Calibration wizard** — guided setup: mark the camera position on the monitor, set center, record left/right/up/down head motions; measures direction, gain, jitter and lag per axis and proposes sensitivity/inversion/recenter changes
+- **Tuning assistant** — records your real head movements while tracking and suggests exact per-axis changes (sensitivity, inversion, smoothing) applied with one click
 - **Profile system** — Create, delete profiles; profiles apply instantly on selection; center pose and response curves are stored per profile
 - **Live settings** — Profile, per-axis settings, smoothing, camera rotation/mirror/CLAHE, camera adaptation and mouse options change instantly while tracking runs
 - **Auto-save** — Settings and profile edits are saved automatically (debounced), not only on exit
@@ -243,13 +246,11 @@ relative to the monitor, like in commercial trackers:
   keep the center in the current profile — it is then applied automatically
   whenever tracking starts with that profile (handy for different sitting
   positions per game); the center is otherwise per session.
-- **Setup helper…** — opens a visual dialog: two schematic views (top and
-  side) of the monitor, the camera and your face. Drag the camera (green) and
-  the yellow rotation handle, and drag the face (cyan) to set your sitting
-  distance. With **Auto-aim at face** enabled, the camera tilt values are
-  computed automatically so the camera points at the face; uncheck it to
-  adjust Yaw/Pitch by hand. The roll slider and the live value readout sit
-  below the views. Every change is applied live to the settings, then fine
+- **Setup helper…** — opens a visual dialog with a 2D front view of the monitor:
+  click or drag on the screen to mark where the camera sits (positions are
+  measured from the screen center — clicking the center gives 0,0). The camera
+  yaw/pitch are aimed at your face automatically and your distance is tuned
+  during calibration. Every change is applied live to the settings, then fine
   tune in the spin boxes if needed.
 
 All values apply live while tracking, so you can tune them by watching the

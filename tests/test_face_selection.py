@@ -66,6 +66,9 @@ class FakeTracker(HeadTracker):
         self._face_boxes = []
         self._blend_pose = Pose()
         self._blend_alpha = 0.0
+        self._last_sane_pose = None
+        self._last_good_time = 0.0
+        self._reject_count = 0
         self._face_landmarker = landmarker
 
 

@@ -4,56 +4,48 @@ import sys
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
+from PySide6.QtCore import QPointF
 from PySide6.QtWidgets import QApplication
 from PySide6.QtGui import QImage, QColor
-from ui.cam_setup_dialog import CamSetupDialog, SetupView, SCALE, ORIGIN_TOP, ORIGIN_SIDE, BG_COLOR
+from ui.cam_setup_dialog import CamSetupDialog, BG_COLOR, BEZEL_COLOR, CAM_COLOR
 
 app = QApplication([])
-d = CamSetupDialog(offset_x_cm=-30, offset_y_cm=15, offset_z_cm=50, yaw=71.6, pitch=56.3, roll=0)
+d = CamSetupDialog(offset_x_cm=-30, offset_y_cm=15, offset_z_cm=50)
 d.resize(d.sizeHint())
 d.show()
 app.processEvents()
+view = d.view
 
-def grab_px(widget, x, y):
-    img = widget.grab().toImage()
+
+def grab_px(pt):
+    img = view.grab().toImage()
     if img.format() != QImage.Format_ARGB32:
         img = img.convertToFormat(QImage.Format_ARGB32)
-    return img.pixelColor(x, y)
+    return img.pixelColor(int(pt.x()), int(pt.y()))
+
 
 def near(c, ref, tol=60):
     return (abs(c.red() - ref.red()) <= tol and abs(c.green() - ref.green()) <= tol
             and abs(c.blue() - ref.blue()) <= tol)
+
 
 def check(name, got, ref, tol=60):
     ok = near(got, ref, tol)
     print(("PASS" if ok else "FAIL"), name, got.name())
     return ok
 
+
 ok = True
-side, top = d.view_side, d.view_top
+ok &= check("bg", grab_px(QPointF(5, 5)), BG_COLOR)
 
-ok &= check("side bg", grab_px(side, 5, 5), BG_COLOR)
-cam_px = side._to_px(side.cam)
-head_px = side._to_px(side.head)
-ok &= check("side screen bar", grab_px(side, int(ORIGIN_SIDE[0]), int(ORIGIN_SIDE[1])), QColor("#7f8c8d"), 90)
-ok &= check("side face", grab_px(side, int(head_px.x()), int(head_px.y())), QColor("#00d4ff"))
-ok &= check("side cam rect", grab_px(side, int(cam_px.x()), int(cam_px.y())), QColor("#2ecc71"))
-dd = side._axis_dir()
-tip = cam_px + dd * 46
-rear = cam_px + dd * -40
-ok &= check("side tip knob", grab_px(side, int(tip.x()), int(tip.y())), QColor("#f1c40f"))
-ok &= check("side rear knob", grab_px(side, int(rear.x()), int(rear.y())), QColor("#f1c40f"))
+bezel = view.bezel_rect()
+ok &= check("bezel", grab_px(QPointF(bezel.center().x(), bezel.top() + 3.0)), BEZEL_COLOR)
 
-cam_px = top._to_px(top.cam)
-head_px = top._to_px(top.head)
-ok &= check("top screen bar", grab_px(top, int(ORIGIN_TOP[0]), int(ORIGIN_TOP[1])), QColor("#7f8c8d"), 90)
-ok &= check("top face", grab_px(top, int(head_px.x()), int(head_px.y())), QColor("#00d4ff"))
-ok &= check("top cam rect", grab_px(top, int(cam_px.x()), int(cam_px.y())), QColor("#2ecc71"))
-dd = top._axis_dir()
-tip = cam_px + dd * 46
-rear = cam_px + dd * -40
-ok &= check("top tip knob", grab_px(top, int(tip.x()), int(tip.y())), QColor("#f1c40f"))
-ok &= check("top rear knob", grab_px(top, int(rear.x()), int(rear.y())), QColor("#f1c40f"))
+sr = view.screen_rect()
+ok &= check("screen", grab_px(QPointF(sr.center().x() + 30.0, sr.center().y())), QColor("#1b1b2f"))
+
+marker = view._to_px(view.cam.x(), view.cam.y())
+ok &= check("camera marker", grab_px(QPointF(marker.x() - 6.0, marker.y())), CAM_COLOR)
 
 print("RENDER", "OK" if ok else "FAILED")
 if not ok:

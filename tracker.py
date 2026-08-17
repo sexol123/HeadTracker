@@ -33,6 +33,19 @@ LANDMARK_INDICES = [1, 152, 263, 33, 291, 61]
 
 MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "face_landmarker.task")
 
+# Sanity gate: solvePnP occasionally degenerates to physically impossible
+# poses (roll ~160 deg, pitch ~-170 deg, z ~1.7 m) while landmarks stay fully
+# visible (conf=1.0). These limits reject such frames before they reach the
+# game: single-frame "flip" jerks in the preview and output.
+MAX_YAW_DEG = 90.0
+MAX_PITCH_DEG = 80.0
+MAX_ROLL_DEG = 60.0
+MAX_STEP_DEG = 30.0        # max angular step vs last accepted frame
+MAX_STEP_MM = 200.0        # max translation step vs last accepted frame (mm)
+Z_MIN_MM = 50.0            # plausible camera distance range (abs value)
+Z_MAX_MM = 3000.0
+SANITY_HOLD_TIME = 0.6     # seconds to fade confidence while rejecting frames
+
 
 class HeadTracker:
     def __init__(
@@ -91,6 +104,11 @@ class HeadTracker:
         # Pose blending state
         self._blend_pose = Pose()
         self._blend_alpha: float = 0.0
+
+        # Sanity gate state
+        self._last_sane_pose: Pose | None = None
+        self._last_good_time: float = time.perf_counter()
+        self._reject_count: int = 0
 
     def get_last_landmarks(self):
         return self._last_landmarks
@@ -158,6 +176,7 @@ class HeadTracker:
         if not result.face_landmarks:
             self._last_landmarks = None
             self._raw_confidence = 0.0
+            self._last_sane_pose = None
             if self._pose_filter is not None:
                 self._pose_filter.reset()
             self._face_boxes = []
@@ -272,6 +291,26 @@ class HeadTracker:
             confidence=visibility_ratio,
             timestamp=timestamp,
         )
+
+        # Sanity gate: reject physically impossible PnP solutions. Landmarks
+        # stay visible during degenerate solves, so confidence alone cannot
+        # catch them — a garbage frame must not reach the output.
+        if not self._pose_is_sane(raw_pose, self._last_sane_pose):
+            self._reject_count += 1
+            if self._reject_count == 1 or self._reject_count % 120 == 0:
+                log.warning(
+                    "Sanity gate: rejecting impossible pose "
+                    "yaw=%+.1f pitch=%+.1f roll=%+.1f x=%+.0f y=%+.0f z=%+.0f "
+                    "(total rejected: %d)",
+                    raw_pose.yaw, raw_pose.pitch, raw_pose.roll,
+                    raw_pose.x, raw_pose.y, raw_pose.z, self._reject_count,
+                )
+            elapsed = time.perf_counter() - self._last_good_time
+            hold_frac = max(0.0, 1.0 - elapsed / SANITY_HOLD_TIME)
+            return self._build_pose(hold_frac, timestamp)
+
+        self._last_good_time = time.perf_counter()
+        self._last_sane_pose = raw_pose.copy()
         self._last_pnp_pose = raw_pose.copy()
 
         if self._calibration is not None:
@@ -329,6 +368,36 @@ class HeadTracker:
     def _rotation_matrix_to_euler(R: np.ndarray) -> dict:
         yaw, pitch, roll = rotation_matrix_to_euler(R)
         return {"yaw": yaw, "pitch": pitch, "roll": roll}
+
+    @staticmethod
+    def _pose_is_sane(pose: Pose, prev: Pose | None = None) -> bool:
+        """True when a raw PnP pose is physically plausible.
+
+        Absolute limits catch degenerate solves; step limits catch single-frame
+        teleports (a real head cannot move 140 deg or 1.6 m in one frame).
+        ``prev`` should be the last *accepted* raw pose, None on first frame.
+
+        Depth is compared by magnitude: mirrored camera streams (selfie view)
+        produce a stable mirror solve with z < 0 — a consistent, valid
+        configuration. Flipping between the two solutions is a huge step and is
+        caught by the step limits instead."""
+        if abs(pose.yaw) > MAX_YAW_DEG:
+            return False
+        if abs(pose.pitch) > MAX_PITCH_DEG:
+            return False
+        if abs(pose.roll) > MAX_ROLL_DEG:
+            return False
+        if not (Z_MIN_MM <= abs(pose.z) <= Z_MAX_MM):
+            return False
+        if prev is not None:
+            d_yaw = abs((pose.yaw - prev.yaw + 180.0) % 360.0 - 180.0)
+            if max(d_yaw, abs(pose.pitch - prev.pitch),
+                   abs(pose.roll - prev.roll)) > MAX_STEP_DEG:
+                return False
+            if max(abs(pose.x - prev.x), abs(pose.y - prev.y),
+                   abs(pose.z - prev.z)) > MAX_STEP_MM:
+                return False
+        return True
 
     def close(self):
         log.info("Closing HeadTracker...")

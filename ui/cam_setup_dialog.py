@@ -3,212 +3,161 @@ import math
 from PySide6.QtCore import Qt, QPointF, QRectF
 from PySide6.QtGui import QPainter, QColor, QPen, QFont, QBrush
 from PySide6.QtWidgets import (
-    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel, QCheckBox,
-    QSlider, QPushButton, QGroupBox, QGridLayout,
+    QDialog, QWidget, QVBoxLayout, QHBoxLayout, QLabel,
+    QPushButton, QGridLayout,
 )
 
 from i18n import t
 
-SCALE = 3.0
-ORIGIN_SIDE = (60.0, 150.0)
-ORIGIN_TOP = (210.0, 30.0)
+# ── monitor front view (cm); origin = screen center ─────────────────────────
+VIEW_W, VIEW_H = 380, 300
+PAD = 24.0
+BEZEL = 10.0
+MON_X_MIN, MON_X_MAX = -62.0, 62.0
+MON_Y_MIN, MON_Y_MAX = -35.0, 35.0
 HEAD_Z = 60.0
-CAM_TOP_DEFAULT = QPointF(0.0, 50.0)
-CAM_SIDE_DEFAULT = QPointF(50.0, 15.0)
+CAM_DEFAULT = (0.0, 35.0, 50.0)   # attached to the top edge, centered
 
-FACE_COLOR = QColor("#00d4ff")
-CAM_COLOR = QColor("#2ecc71")
-GRID_COLOR = QColor(255, 255, 255, 28)
 BG_COLOR = QColor("#1a1a2e")
+BEZEL_COLOR = QColor("#2b2b40")
+SCREEN_DARK = QColor("#1b1b2f")
+# shared palette (also used by the axes helper dialogs)
+GRID_COLOR = QColor(255, 255, 255, 28)
 SCREEN_COLOR = QColor("#7f8c8d")
+FACE_COLOR = QColor("#00d4ff")
+GRID_TINT = QColor(120, 140, 220, 24)
+CAM_COLOR = QColor("#2ecc71")
+LENS_COLOR = QColor("#0e8a4d")
+MARKER_W, MARKER_H = 24.0, 16.0
+MARKER_RADIUS = 16.0
 
 
-class SetupView(QWidget):
-    TOP = 0
-    SIDE = 1
+class CamView2D(QWidget):
+    """Front view of the monitor. Click or drag anywhere on the screen area
+    to place the camera marker; its position defines the camera offset
+    relative to the screen."""
 
-    def __init__(self, mode: int, parent=None):
+    def __init__(self, cam_x=0.0, cam_y=0.0, parent=None):
         super().__init__(parent)
-        self.mode = mode
-        self.cam = QPointF(0.0, 0.0)
-        self.head = QPointF(0.0, HEAD_Z) if mode == self.TOP else QPointF(HEAD_Z, 0.0)
-        self.angle = 0.0
-        self.auto_aim = True
-        self.drag = None
-        self.on_changed = None
-        self.on_head_moved = None
-        self.on_cam_moved = None
-        self.setFixedSize(420, 300)
-        self.setMouseTracking(True)
+        self.cam = QPointF(cam_x, cam_y)
+        self.on_moved = None
+        self._drag = False
+        self.setFixedSize(VIEW_W, VIEW_H)
 
-    def _to_px(self, p: QPointF) -> QPointF:
-        if self.mode == self.SIDE:
-            return QPointF(ORIGIN_SIDE[0] + p.x() * SCALE, ORIGIN_SIDE[1] - p.y() * SCALE)
-        return QPointF(ORIGIN_TOP[0] + p.x() * SCALE, ORIGIN_TOP[1] + p.y() * SCALE)
+    # ── geometry helpers (used by painting, tests) ───────────────────────────
+    def screen_rect(self) -> QRectF:
+        return QRectF(PAD, PAD, VIEW_W - 2.0 * PAD, VIEW_H - 2.0 * PAD)
 
-    def _from_px(self, px: QPointF) -> QPointF:
-        if self.mode == self.SIDE:
-            return QPointF((px.x() - ORIGIN_SIDE[0]) / SCALE, (ORIGIN_SIDE[1] - px.y()) / SCALE)
-        return QPointF((px.x() - ORIGIN_TOP[0]) / SCALE, (px.y() - ORIGIN_TOP[1]) / SCALE)
+    def bezel_rect(self) -> QRectF:
+        b = PAD - BEZEL
+        return QRectF(b, b, VIEW_W - 2.0 * b, VIEW_H - 2.0 * b)
 
-    def clamp(self, p: QPointF) -> QPointF:
-        if self.mode == self.SIDE:
-            return QPointF(max(5.0, min(120.0, p.x())), max(-50.0, min(50.0, p.y())))
-        return QPointF(max(-70.0, min(70.0, p.x())), max(5.0, min(120.0, p.y())))
+    def _to_px(self, x, y) -> QPointF:
+        sc = self.screen_rect()
+        fx = (x - MON_X_MIN) / (MON_X_MAX - MON_X_MIN)
+        fy = (y - MON_Y_MIN) / (MON_Y_MAX - MON_Y_MIN)
+        return QPointF(sc.left() + fx * sc.width(), sc.top() + fy * sc.height())
 
-    def head_z(self, px: QPointF) -> float:
-        z = self._from_px(px).x() if self.mode == self.SIDE else self._from_px(px).y()
-        return max(10.0, min(120.0, z))
+    def _from_px(self, pos: QPointF) -> QPointF:
+        sc = self.screen_rect()
+        fx = (pos.x() - sc.left()) / sc.width()
+        fy = (pos.y() - sc.top()) / sc.height()
+        return QPointF(MON_X_MIN + fx * (MON_X_MAX - MON_X_MIN),
+                       MON_Y_MIN + fy * (MON_Y_MAX - MON_Y_MIN))
 
-    def angle_to_value(self) -> float:
-        if self.mode == self.SIDE:
-            return self.angle
-        return 90.0 - self.angle
+    def _emit(self):
+        self.update()
+        if self.on_moved is not None:
+            self.on_moved()
 
-    def _aim_angle(self) -> float:
-        cam_px = self._to_px(self.cam)
-        head_px = self._to_px(self.head)
-        return math.degrees(math.atan2(head_px.y() - cam_px.y(), head_px.x() - cam_px.x()))
-
-    def _axis_dir(self) -> QPointF:
-        return QPointF(math.cos(math.radians(self.angle)), math.sin(math.radians(self.angle)))
-
-    def _axis_hit(self, pos: QPointF) -> bool:
-        cam_px = self._to_px(self.cam)
-        d = self._axis_dir()
-        t = (pos - cam_px).x() * d.x() + (pos - cam_px).y() * d.y()
-        t = max(-40.0, min(46.0, t))
-        return (pos - (cam_px + d * t)).manhattanLength() <= 12
-
+    # ── interaction ──────────────────────────────────────────────────────────
     def mousePressEvent(self, event):
         pos = event.position()
-        cam_px = self._to_px(self.cam)
-        head_px = self._to_px(self.head)
-        self.drag = None
-        if (pos - cam_px).manhattanLength() <= 34:
-            self.drag = "cam"
-        elif (pos - head_px).manhattanLength() <= 18:
-            self.drag = "head"
-        elif self._axis_hit(pos):
-            self.drag = "rot"
+        if self.screen_rect().contains(pos):
+            self._drag = True
+            self.cam = self._from_px(pos)
+            self._emit()
         event.accept()
 
     def mouseMoveEvent(self, event):
-        if self.drag is None:
+        if not self._drag:
             return
         pos = event.position()
-        cam_px = self._to_px(self.cam)
-        if self.drag == "cam":
-            self.cam = self.clamp(self._from_px(pos))
-            if self.on_cam_moved is not None:
-                self.on_cam_moved(self)
-            if self.auto_aim:
-                self.angle = self._aim_angle()
-        elif self.drag == "head":
-            z = self.head_z(pos)
-            self.head = QPointF(0.0, z) if self.mode == self.TOP else QPointF(z, 0.0)
-            if self.on_head_moved is not None:
-                self.on_head_moved(z)
-            if self.auto_aim:
-                self.angle = self._aim_angle()
-        elif self.drag == "rot":
-            self.angle = math.degrees(math.atan2(pos.y() - cam_px.y(), pos.x() - cam_px.x()))
-        self.update()
-        if self.on_changed is not None:
-            self.on_changed()
+        if self.screen_rect().contains(pos):
+            self.cam = self._from_px(pos)
+        self._emit()
         event.accept()
 
     def mouseReleaseEvent(self, event):
-        self.drag = None
+        self._drag = False
         event.accept()
 
+    # ── painting ─────────────────────────────────────────────────────────────
     def paintEvent(self, event):
         p = QPainter(self)
         p.fillRect(self.rect(), BG_COLOR)
         p.setRenderHint(QPainter.Antialiasing)
         p.setFont(QFont("Segoe UI", 8))
-        p.setPen(QPen(GRID_COLOR, 1))
-        if self.mode == self.SIDE:
-            for z in range(25, 125, 25):
-                x = ORIGIN_SIDE[0] + z * SCALE
-                p.drawLine(int(x), 0, int(x), self.height())
-            for y in range(-50, 51, 25):
-                yy = ORIGIN_SIDE[1] - y * SCALE
-                p.drawLine(0, int(yy), self.width(), int(yy))
-            p.setPen(QPen(SCREEN_COLOR, 4))
-            p.drawLine(int(ORIGIN_SIDE[0]), int(ORIGIN_SIDE[1] - 80), int(ORIGIN_SIDE[0]), int(ORIGIN_SIDE[1] + 80))
-        else:
-            for x in range(-50, 51, 25):
-                xx = ORIGIN_TOP[0] + x * SCALE
-                p.drawLine(int(xx), 0, int(xx), self.height())
-            for z in range(25, 125, 25):
-                yy = ORIGIN_TOP[1] + z * SCALE
-                p.drawLine(0, int(yy), self.width(), int(yy))
-            p.setPen(QPen(SCREEN_COLOR, 4))
-            p.drawLine(int(ORIGIN_TOP[0] - 80), int(ORIGIN_TOP[1]), int(ORIGIN_TOP[0] + 80), int(ORIGIN_TOP[1]))
 
-        head_px = self._to_px(self.head)
+        br = self.bezel_rect()
         p.setPen(Qt.NoPen)
-        p.setBrush(QBrush(FACE_COLOR))
-        p.drawEllipse(head_px, 12, 12)
-        p.setPen(QPen(FACE_COLOR))
-        p.drawText(QRectF(head_px.x() - 30, head_px.y() - 40, 60, 20), Qt.AlignCenter, t("cam_setup_face"))
+        p.setBrush(QBrush(BEZEL_COLOR))
+        p.drawRoundedRect(br, 6, 6)
 
-        cam_px = self._to_px(self.cam)
-        d = self._axis_dir()
+        sr = self.screen_rect()
+        p.setPen(Qt.NoPen)
+        p.setBrush(QBrush(SCREEN_DARK))
+        p.drawRect(sr)
+
+        p.setPen(QPen(GRID_TINT, 1))
+        for i in range(1, 3):
+            x = sr.left() + sr.width() * i / 3.0
+            y = sr.top() + sr.height() * i / 3.0
+            p.drawLine(QPointF(x, sr.top()), QPointF(x, sr.bottom()))
+            p.drawLine(QPointF(sr.left(), y), QPointF(sr.right(), y))
+
+        cx = sr.center()
+        p.setPen(QPen(SCREEN_COLOR, 2))
+        p.drawLine(QPointF(cx.x() - 8.0, cx.y()), QPointF(cx.x() + 8.0, cx.y()))
+        p.drawLine(QPointF(cx.x(), cx.y() - 8.0), QPointF(cx.x(), cx.y() + 8.0))
+
+        px = self._to_px(self.cam.x(), self.cam.y())
         p.setPen(Qt.NoPen)
         p.setBrush(QBrush(CAM_COLOR))
-        p.drawRoundedRect(QRectF(cam_px.x() - 22, cam_px.y() - 15, 44, 30), 4, 4)
-        p.setPen(QPen(CAM_COLOR, 3))
-        p.drawLine(cam_px + d * 4, cam_px + d * 46)
-        p.setPen(Qt.NoPen)
-        p.setBrush(QBrush(QColor("#f1c40f")))
-        p.drawEllipse(cam_px + d * 46, 5, 5)
-        p.drawEllipse(cam_px + d * -40, 7, 7)
+        p.drawRoundedRect(QRectF(px.x() - MARKER_W / 2.0, px.y() - MARKER_H / 2.0,
+                                 MARKER_W, MARKER_H), 4, 4)
+        p.setBrush(QBrush(LENS_COLOR))
+        p.drawEllipse(px, 3.0, 3.0)
+
+        label_y = max(PAD, px.y() - MARKER_H / 2.0 - 21.0)
         p.setPen(QPen(CAM_COLOR))
-        p.drawText(QRectF(cam_px.x() - 30, cam_px.y() - 45, 60, 20), Qt.AlignCenter, t("cam_setup_cam"))
+        p.drawText(QRectF(px.x() - 40.0, label_y, 80.0, 18.0),
+                   Qt.AlignCenter, t("cam_setup_cam"))
         p.end()
 
 
-class CamSetupDialog(QDialog):
+class CamSetupWidget(QWidget):
+    """Simplified camera-position editor: pick the camera spot on a front
+    view of the monitor. The camera-to-user distance is left to calibration,
+    yaw/pitch auto-aim at the face, roll passes through unchanged.
+    Emits values through apply_callback(ox, oy, oz, yaw, pitch, roll)."""
+
     def __init__(self, offset_x_cm=0.0, offset_y_cm=0.0, offset_z_cm=0.0,
                  yaw=0.0, pitch=0.0, roll=0.0, parent=None):
         super().__init__(parent)
-        self.setWindowTitle(t("cam_setup_title"))
         self.apply_callback = None
 
-        self.view_top = SetupView(SetupView.TOP)
-        self.view_side = SetupView(SetupView.SIDE)
-        self.view_top.on_changed = self._on_any_changed
-        self.view_side.on_changed = self._on_any_changed
-        self.view_top.on_head_moved = self._on_head_moved
-        self.view_side.on_head_moved = self._on_head_moved
-        self.view_top.on_cam_moved = self._on_cam_moved
-        self.view_side.on_cam_moved = self._on_cam_moved
+        fresh = offset_x_cm == 0.0 and offset_y_cm == 0.0 and offset_z_cm == 0.0 \
+            and yaw == 0.0 and pitch == 0.0 and roll == 0.0
+        cx, cy = (CAM_DEFAULT[0], CAM_DEFAULT[1]) if fresh else (offset_x_cm, offset_y_cm)
+        cx = max(MON_X_MIN, min(MON_X_MAX, cx))
+        cy = max(MON_Y_MIN, min(MON_Y_MAX, cy))
+        self.oz = CAM_DEFAULT[2] if fresh else offset_z_cm
+        self.roll_val = 0.0 if fresh else roll
 
-        views_row = QHBoxLayout()
-        top_group = QGroupBox(t("cam_setup_top"))
-        top_lay = QVBoxLayout(top_group)
-        top_lay.addWidget(self.view_top)
-        side_group = QGroupBox(t("cam_setup_side"))
-        side_lay = QVBoxLayout(side_group)
-        side_lay.addWidget(self.view_side)
-        views_row.addWidget(top_group)
-        views_row.addWidget(side_group)
-
-        self.chk_auto_aim = QCheckBox(t("cam_setup_aim"))
-        self.chk_auto_aim.setChecked(True)
-        self.chk_auto_aim.toggled.connect(self._on_aim_toggled)
-        self.lbl_roll = QLabel(t("cam_tilt_roll"))
-        self.slider_roll = QSlider(Qt.Horizontal)
-        self.slider_roll.setRange(-45, 45)
-        self.slider_roll.valueChanged.connect(self._on_any_changed)
-        self.lbl_roll_val = QLabel("0°")
-        self.lbl_roll_val.setFixedWidth(44)
-        roll_row = QHBoxLayout()
-        roll_row.addWidget(self.lbl_roll)
-        roll_row.addWidget(self.slider_roll, 1)
-        roll_row.addWidget(self.lbl_roll_val)
+        self.view = CamView2D(cx, cy)
+        self.view.on_moved = self._on_any_changed
+        self.view.setToolTip(t("cam_setup_hint"))
 
         self._value_labels = {}
         self._values_grid = QGridLayout()
@@ -221,85 +170,31 @@ class CamSetupDialog(QDialog):
 
         self.btn_reset = QPushButton(t("cam_setup_reset"))
         self.btn_reset.clicked.connect(self._on_reset)
-        self.btn_close = QPushButton(t("cam_setup_close"))
-        self.btn_close.clicked.connect(self.accept)
         btns = QHBoxLayout()
         btns.addWidget(self.btn_reset)
         btns.addStretch()
-        btns.addWidget(self.btn_close)
 
         main = QVBoxLayout(self)
-        main.addLayout(views_row)
-        aim_row = QHBoxLayout()
-        aim_row.addWidget(self.chk_auto_aim)
-        aim_row.addLayout(roll_row)
-        main.addLayout(aim_row)
+        main.addWidget(self.view, 0, Qt.AlignHCenter)
         main.addLayout(self._values_grid)
         main.addLayout(btns)
-
-        if offset_x_cm == 0.0 and offset_y_cm == 0.0 and offset_z_cm == 0.0:
-            self.view_top.cam = QPointF(CAM_TOP_DEFAULT)
-            self.view_side.cam = QPointF(CAM_SIDE_DEFAULT)
-        else:
-            self.view_top.cam = QPointF(offset_x_cm, offset_z_cm)
-            self.view_side.cam = QPointF(offset_z_cm, offset_y_cm)
-
-        aim_yaw, aim_pitch = self._aim_values()
-        self.view_top.angle = self.view_top._aim_angle()
-        self.view_side.angle = self.view_side._aim_angle()
-        fresh = offset_x_cm == 0.0 and offset_y_cm == 0.0 and offset_z_cm == 0.0 \
-            and yaw == 0.0 and pitch == 0.0 and roll == 0.0
-        auto = fresh or (abs(aim_yaw - yaw) <= 0.5 and abs(aim_pitch - pitch) <= 0.5)
-        self.chk_auto_aim.setChecked(auto)
-        self.slider_roll.setValue(int(round(roll)))
-        self.view_top.update()
-        self.view_side.update()
         self._on_any_changed()
 
     def _aim_values(self):
-        dx = -self.view_top.cam.x()
-        dy = -self.view_side.cam.y()
-        dz = self.view_top.head.y() - self.view_side.cam.x()
-        yaw = math.degrees(math.asin(max(-1.0, min(1.0, dx / math.sqrt(dx * dx + dy * dy + dz * dz)))))
+        dx = -self.view.cam.x()
+        dy = -self.view.cam.y()
+        dz = HEAD_Z - self.oz
+        length = math.sqrt(dx * dx + dy * dy + dz * dz) or 1.0
+        yaw = math.degrees(math.asin(max(-1.0, min(1.0, dx / length))))
         pitch = math.degrees(math.atan2(-dy, dz))
         return yaw, pitch
 
     def _values(self):
-        ox = self.view_top.cam.x()
-        oy = self.view_side.cam.y()
-        oz = self.view_side.cam.x()
-        if self.chk_auto_aim.isChecked():
-            yaw, pitch = self._aim_values()
-        else:
-            yaw = self.view_top.angle_to_value()
-            pitch = self.view_side.angle_to_value()
-        roll = self.slider_roll.value()
-        return ox, oy, oz, yaw, pitch, roll
-
-    def _on_head_moved(self, z):
-        self.view_top.head.setY(z)
-        self.view_side.head.setX(z)
-        self.view_top.update()
-        self.view_side.update()
-
-    def _on_cam_moved(self, view):
-        if view is self.view_top:
-            x, z = view.cam.x(), view.cam.y()
-            y = self.view_side.cam.y()
-        else:
-            z, y = view.cam.x(), view.cam.y()
-            x = self.view_top.cam.x()
-        self.view_top.cam = QPointF(x, z)
-        self.view_side.cam = QPointF(z, y)
-        self.view_top.update()
-        self.view_side.update()
+        ox, oy = self.view.cam.x(), self.view.cam.y()
+        yaw, pitch = self._aim_values()
+        return ox, oy, self.oz, yaw, pitch, self.roll_val
 
     def _on_any_changed(self, *_):
-        if self.chk_auto_aim.isChecked():
-            self.view_top.angle = self.view_top._aim_angle()
-            self.view_side.angle = self.view_side._aim_angle()
-            self.view_top.update()
-            self.view_side.update()
         ox, oy, oz, yaw, pitch, roll = self._values()
         self._value_labels["X"].setText(f"{ox:+.1f} cm")
         self._value_labels["Y"].setText(f"{oy:+.1f} cm")
@@ -307,28 +202,47 @@ class CamSetupDialog(QDialog):
         self._value_labels["Yaw"].setText(f"{yaw:+.1f}°")
         self._value_labels["Pitch"].setText(f"{pitch:+.1f}°")
         self._value_labels["Roll"].setText(f"{roll:+.1f}°")
-        self.lbl_roll_val.setText(f"{roll:+d}°")
         if self.apply_callback is not None:
             self.apply_callback(ox, oy, oz, yaw, pitch, roll)
 
-    def _on_aim_toggled(self, checked):
-        self.view_top.auto_aim = checked
-        self.view_side.auto_aim = checked
-        if checked:
-            self.view_top.angle = self.view_top._aim_angle()
-            self.view_side.angle = self.view_side._aim_angle()
-            self.view_top.update()
-            self.view_side.update()
-            self._on_any_changed()
-
     def _on_reset(self):
-        self.view_top.cam = QPointF(CAM_TOP_DEFAULT)
-        self.view_side.cam = QPointF(CAM_SIDE_DEFAULT)
-        self.view_top.head = QPointF(0.0, HEAD_Z)
-        self.view_side.head = QPointF(HEAD_Z, 0.0)
-        self.view_top.angle = self.view_top._aim_angle()
-        self.view_side.angle = self.view_side._aim_angle()
-        self.slider_roll.setValue(0)
-        self.view_top.update()
-        self.view_side.update()
+        self.view.cam = QPointF(CAM_DEFAULT[0], CAM_DEFAULT[1])
+        self.oz = CAM_DEFAULT[2]
+        self.roll_val = 0.0
+        self.view.update()
         self._on_any_changed()
+
+
+class CamSetupDialog(QDialog):
+    """Thin dialog wrapper around CamSetupWidget. Public API is unchanged:
+    constructor offsets, apply_callback(ox, oy, oz, yaw, pitch, roll),
+    view attribute."""
+
+    def __init__(self, offset_x_cm=0.0, offset_y_cm=0.0, offset_z_cm=0.0,
+                 yaw=0.0, pitch=0.0, roll=0.0, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle(t("cam_setup_title"))
+        self.apply_callback = None
+
+        self.widget = CamSetupWidget(
+            offset_x_cm=offset_x_cm, offset_y_cm=offset_y_cm, offset_z_cm=offset_z_cm,
+            yaw=yaw, pitch=pitch, roll=roll, parent=self,
+        )
+        self.view = self.widget.view
+        self._values = self.widget._values
+        self._on_reset = self.widget._on_reset
+
+        def forward(*values):
+            if self.apply_callback is not None:
+                self.apply_callback(*values)
+
+        self.widget.apply_callback = forward
+        self.btn_close = QPushButton(t("cam_setup_close"))
+        self.btn_close.clicked.connect(self.accept)
+        btns = QHBoxLayout()
+        btns.addStretch()
+        btns.addWidget(self.btn_close)
+
+        main = QVBoxLayout(self)
+        main.addWidget(self.widget)
+        main.addLayout(btns)

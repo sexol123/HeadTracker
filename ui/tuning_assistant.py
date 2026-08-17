@@ -10,11 +10,13 @@ from datetime import datetime
 from pathlib import Path
 
 import numpy as np
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QPushButton, QLabel, QTextEdit, QMessageBox,
 )
 
 from i18n import t
+from qobject_diag import track_obj
 
 log = logging.getLogger("tuning")
 
@@ -26,8 +28,10 @@ LAG_THRESHOLD_MS = 90      # above this, smoothing feels laggy
 JITTER_THRESHOLD_DEG = 1.2  # rms of high-freq residual -> "jittery"
 JITTER_THRESHOLD_MM = 12.0
 DEADZONE_MOVING_FRAC = 0.15  # mapped ~0 while clearly moving -> deadzone too big
-DRIFT_THRESHOLD_DEG = 5.0    # mean raw offset -> recenter / drift
-DRIFT_THRESHOLD_MM = 25.0
+DRIFT_THRESHOLD_DEG = 5.0    # mean raw angle offset -> recenter / drift
+MIN_CONFIDENCE = 0.5         # below this the pipeline holds a stale pose
+SPIKE_ANGLE_DEG = 30.0       # impossible between-frame head jump at 60Hz
+SPIKE_TRANS_MM = 60.0
 GAIN_LOW = 0.7
 GAIN_HIGH = 1.5
 MIN_RAW_RANGE_DEG = 2.0       # below this a "range" analysis is meaningless
@@ -147,11 +151,42 @@ def _axis_report(samples: list[dict], axis: str) -> dict:
     return report
 
 
+def _jump(s, other) -> tuple[float, float]:
+    return (max(abs(s["raw"][a] - other["raw"][a]) for a in ANGLES),
+            max(abs(s["raw"][a] - other["raw"][a]) for a in ("x", "y", "z")))
+
+
+def _clean_samples(samples: list[dict]) -> tuple[list[dict], int]:
+    """Drop stale low-confidence frames and isolated spike frames, which
+    would otherwise poison the range/jitter/drift metrics. A frame is a
+    spike only if it jumps beyond physical limits from BOTH neighbours, so
+    genuine fast head motion is never harmed."""
+    clean: list[dict] = []
+    prev_good = None
+    dropped = 0
+    for i, s in enumerate(samples):
+        if s["confidence"] < MIN_CONFIDENCE:
+            dropped += 1
+            continue
+        nxt = samples[i + 1] if i + 1 < len(samples) else None
+        if prev_good is not None and nxt is not None:
+            a_prev, t_prev = _jump(s, prev_good)
+            a_next, t_next = _jump(nxt, s)
+            if (a_prev > SPIKE_ANGLE_DEG or t_prev > SPIKE_TRANS_MM) and \
+                    (a_next > SPIKE_ANGLE_DEG or t_next > SPIKE_TRANS_MM):
+                dropped += 1
+                continue
+        prev_good = s
+        clean.append(s)
+    return clean, dropped
+
+
 def analyze_tuning(samples: list[dict]) -> dict:
     """Full analysis: per-axis reports + human recommendations."""
+    samples, dropped = _clean_samples(samples)
     if len(samples) < MIN_SAMPLES:
-        return {"ok": False, "count": len(samples), "reports": [], "recommendations": [],
-                "changes": {}}
+        return {"ok": False, "count": len(samples), "dropped": dropped,
+                "reports": [], "recommendations": [], "changes": {}}
     reports = [_axis_report(samples, a) for a in AXES]
     recommendations: list[str] = []
     changes: dict = {}
@@ -178,14 +213,94 @@ def analyze_tuning(samples: list[dict]) -> dict:
         if r["jitter_rms"] > (JITTER_THRESHOLD_DEG if axis in ANGLES else JITTER_THRESHOLD_MM):
             recommendations.append(t("tuning_jitter").format(axis, f"{r['jitter_rms']:.2f}"))
             changes.setdefault("pose_smoothing", "increase")
-        if abs(r["raw_mean"]) > (DRIFT_THRESHOLD_DEG if axis in ANGLES else DRIFT_THRESHOLD_MM):
-            recommendations.append(t("tuning_drift").format(axis, f"{r['raw_mean']:+.1f}"))
+        if axis in ANGLES and abs(r["raw_mean"]) > DRIFT_THRESHOLD_DEG:
+            recommendations.append(t("tuning_drift").format(axis, f"{r['raw_mean']:+.1f} deg"))
             changes.setdefault("recenter", True)
 
     if not recommendations:
         recommendations.append(t("tuning_ok"))
-    return {"ok": True, "count": len(samples), "reports": reports,
-            "recommendations": recommendations, "changes": changes}
+    return {"ok": True, "count": len(samples), "dropped": dropped,
+            "reports": reports, "recommendations": recommendations,
+            "changes": changes}
+
+
+CALIB_DIRS = ("left", "right", "up", "down")
+CALIB_DIR_AXIS = {"left": "yaw", "right": "yaw", "up": "pitch", "down": "pitch"}
+
+
+def analyze_calibration(segments: list[dict]) -> dict:
+    """Directional calibration analysis.
+
+    segments: list of {"dir": "left"|"right"|"up"|"down", "samples": [sample dicts]}
+    recorded with the same sample shape as TuningRecorder produces.
+
+    Returns the same shape as analyze_tuning(): ok / count / dropped / reports /
+    recommendations / changes, so the wizard can reuse the standard apply path
+    (_apply_tuning_changes) unchanged. yaw comes from the left/right segments,
+    pitch from up/down. Deadzone/curve are never changed; roll and translation
+    axes are reported only.
+    """
+    reports = []
+    for seg in segments:
+        direction = seg.get("dir", "left")
+        axis = CALIB_DIR_AXIS.get(direction, "yaw")
+        clean, dropped = _clean_samples(seg.get("samples") or [])
+        report = _axis_report(clean, axis)
+        report.update({"dir": direction, "count": len(clean), "dropped": dropped})
+        reports.append(report)
+
+    total = sum(r["count"] for r in reports)
+    total_dropped = sum(r["dropped"] for r in reports)
+    if total < MIN_SAMPLES or any(r["count"] < MIN_SAMPLES for r in reports):
+        return {"ok": False, "count": total, "dropped": total_dropped,
+                "reports": reports,
+                "recommendations": [t("calib_insufficient")],
+                "changes": {}}
+
+    recommendations: list[str] = []
+    changes: dict = {}
+
+    def _report_axis(axis):
+        rs = [r for r in reports if r["axis"] == axis]
+        valid_gain = [r for r in rs if r["gain"] is not None]
+        if valid_gain:
+            weight = sum(r["raw_range"] for r in valid_gain) or 1.0
+            gain = sum(r["gain"] * r["raw_range"] for r in valid_gain) / weight
+            if gain < GAIN_LOW:
+                factor = round(1.0 / gain, 2)
+                recommendations.append(t("tuning_gain_low").format(axis, f"{gain:.2f}", factor))
+                changes.setdefault("axes", {})[axis] = {"sensitivity": factor}
+            elif gain > GAIN_HIGH:
+                factor = round(gain, 2)
+                recommendations.append(t("tuning_gain_high").format(axis, f"{gain:.2f}", factor))
+                changes.setdefault("axes", {})[axis] = {"sensitivity": factor}
+        if all(r["inverted"] for r in rs):
+            recommendations.append(t("tuning_invert").format(axis))
+            changes.setdefault("axes", {}).setdefault(axis, {})["inverted"] = True
+        if any(r["deadzone_frac"] > DEADZONE_MOVING_FRAC for r in rs):
+            worst = max(r["deadzone_frac"] for r in rs)
+            recommendations.append(t("tuning_deadzone").format(axis, f"{worst * 100:.0f}"))
+        if any(r["lag_ms"] > LAG_THRESHOLD_MS for r in rs):
+            worst = max(r["lag_ms"] for r in rs)
+            recommendations.append(t("tuning_lag").format(axis, f"{worst:.0f}"))
+            changes.setdefault("pose_smoothing", "decrease")
+        if any(r["jitter_rms"] > (JITTER_THRESHOLD_DEG if axis in ANGLES else JITTER_THRESHOLD_MM) for r in rs):
+            worst = max(r["jitter_rms"] for r in rs)
+            recommendations.append(t("tuning_jitter").format(axis, f"{worst:.2f}"))
+            changes.setdefault("pose_smoothing", "increase")
+        if any(abs(r["raw_mean"]) > DRIFT_THRESHOLD_DEG for r in rs):
+            worst = max(abs(r["raw_mean"]) for r in rs)
+            recommendations.append(t("tuning_drift").format(axis, f"{worst:+.1f} deg"))
+            changes.setdefault("recenter", True)
+
+    for axis in ("yaw", "pitch"):
+        _report_axis(axis)
+
+    if not recommendations:
+        recommendations.append(t("tuning_ok"))
+    return {"ok": True, "count": total, "dropped": total_dropped,
+            "reports": reports, "recommendations": recommendations,
+            "changes": changes}
 
 
 def export_tuning(samples: list[dict], profile_name: str, analysis: dict | None,
@@ -245,10 +360,16 @@ class TuningDialog(QDialog):
 
         self.report = QTextEdit()
         self.report.setReadOnly(True)
+        self.report.setFocusPolicy(Qt.NoFocus)
         self.report.setFont(self.report.font())
         layout.addWidget(self.report)
 
         self._refresh_timer = None
+
+        track_obj(self, "tuning_dialog")
+        for w in (hint, self.lbl_status, self.btn_record, self.btn_analyze,
+                  self.btn_apply, self.btn_export, self.report):
+            track_obj(w, f"tuning_child:{type(w).__name__}")
 
     def _on_record(self):
         r = self._recorder
@@ -272,6 +393,8 @@ class TuningDialog(QDialog):
             self.lbl_status.setText(t("tuning_too_few").format(self._analysis["count"]))
             return
         lines = [t("tuning_count").format(self._analysis["count"])]
+        if self._analysis.get("dropped"):
+            lines.append(t("tuning_filtered").format(self._analysis["dropped"]))
         for r in self._analysis["reports"]:
             lines.append(
                 f"{r['axis']}: raw {r['raw_range']:6.1f} -> sent {r['mapped_range']:6.1f}"
