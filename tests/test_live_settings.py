@@ -72,7 +72,7 @@ win.combo_mouse_mode.setCurrentIndex(win.combo_mouse_mode.findData("absolute"))
 win.combo_mouse_stop.setCurrentIndex(win.combo_mouse_stop.findData("toggle"))
 win.combo_mouse_hotkey.setCurrentIndex(win.combo_mouse_hotkey.findData("f9"))
 app.processEvents()
-assert len(calls) == 8, f"expected 8 pushes, got {len(calls)}"
+assert len(calls) == 9, f"expected 9 pushes (8 widgets, mirror toggled twice), got {len(calls)}"
 s = calls[-1]
 assert s.mirror is True and s.image_enhance is True and s.camera_rotation == 180
 assert s.pose_smoothing == 0.65 and s.mouse_speed == 50.0

@@ -79,6 +79,7 @@ def test_ui_set_center_saves_to_profile():
     win = MainWindow(Profile())
     win.show()
     app.processEvents()
+    win._current_profile_path = os.path.join(tempfile.gettempdir(), "ht_center_test.json")
 
     class FakeWorker:
         def recenter_camera(self):
@@ -128,6 +129,7 @@ def test_ui_reset_center_clears_profile():
     win = MainWindow(Profile())
     win.show()
     app.processEvents()
+    win._current_profile_path = os.path.join(tempfile.gettempdir(), "ht_center_test.json")
     win.chk_save_center.setChecked(True)
     win.profile.center_pose = dict(CENTRE)
 
@@ -145,6 +147,7 @@ def test_unchecking_checkbox_clears_profile_center():
     win = MainWindow(Profile())
     win.show()
     app.processEvents()
+    win._current_profile_path = os.path.join(tempfile.gettempdir(), "ht_center_test.json")
     win.profile.center_pose = dict(CENTRE)
     win.chk_save_center.setChecked(True)
     win.chk_save_center.setChecked(False)

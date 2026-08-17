@@ -1,5 +1,6 @@
 import os
 import sys
+import tempfile
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
@@ -17,6 +18,7 @@ def make_win(profile=None):
     win = MainWindow(profile or Profile())
     win.show()
     app.processEvents()
+    win._current_profile_path = os.path.join(tempfile.gettempdir(), "ht_smoothing_guard.json")
     return win
 
 

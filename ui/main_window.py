@@ -832,6 +832,10 @@ class MainWindow(QMainWindow):
                 self.combo_profile.setCurrentIndex(i)
                 break
         self.combo_profile.blockSignals(False)
+        if self._current_profile_path is None:
+            path = self.combo_profile.currentData()
+            if path:
+                self._current_profile_path = Path(path)
         self._update_buttons_for_default()
 
     def _on_profile_changed(self, index):
@@ -921,10 +925,17 @@ class MainWindow(QMainWindow):
         for name, widgets in self._axis_widgets.items():
             if name in p.axes:
                 ax = p.axes[name]
+                # Block signals: valueChanged/toggled would otherwise trigger
+                # _on_axis_changed, which reads the widget values back into the
+                # profile while the widgets still hold constructor defaults.
+                for w in widgets.values():
+                    w.blockSignals(True)
                 widgets["enabled"].setChecked(ax.enabled)
                 widgets["sensitivity"].setValue(ax.sensitivity)
                 widgets["deadzone"].setValue(ax.deadzone)
                 widgets["inverted"].setChecked(ax.inverted)
+                for w in widgets.values():
+                    w.blockSignals(False)
         self.lbl_profile.setText(p.name)
 
         idx = self.combo_protocol.findData(s.output_protocol)
@@ -1006,7 +1017,7 @@ class MainWindow(QMainWindow):
         self._mouse_widget.setVisible(proto == "mouse")
 
     def _read_profile_from_ui(self) -> Profile:
-        p = Profile(name=self.profile.name)
+        p = Profile(name=self.profile.name, center_pose=self.profile.center_pose)
         for name, widgets in self._axis_widgets.items():
             p.axes[name] = AxisConfig(
                 enabled=widgets["enabled"].isChecked(),
